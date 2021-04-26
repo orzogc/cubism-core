@@ -1142,16 +1142,6 @@ impl From<Vector2> for [f32; 2] {
     }
 }
 
-impl From<&[f32]> for Vector2 {
-    #[inline]
-    fn from(vertex: &[f32]) -> Self {
-        Self {
-            x: vertex[0],
-            y: vertex[1],
-        }
-    }
-}
-
 impl From<Vector2> for Vec<f32> {
     #[inline]
     fn from(vertex: Vector2) -> Self {
