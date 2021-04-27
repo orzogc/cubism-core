@@ -436,49 +436,48 @@ impl Model {
     }
 
     #[inline]
-    pub fn get_parameter(&self, index: usize) -> Option<Parameter> {
+    pub fn get_static_parameter(&self, index: usize) -> Option<StaticParameter> {
         if index < self.parameter_count() {
             // SAFETY: index has been checked.
-            Some(unsafe { self.get_parameter_unchecked(index) })
+            Some(unsafe { self.get_static_parameter_unchecked(index) })
         } else {
             None
         }
     }
 
     #[inline]
-    pub unsafe fn get_parameter_unchecked(&self, index: usize) -> Parameter {
-        Parameter {
+    pub unsafe fn get_static_parameter_unchecked(&self, index: usize) -> StaticParameter {
+        StaticParameter {
             index,
             id: self.parameter_ids().get_unchecked(index).clone(),
             min_value: *self.parameter_min_values().get_unchecked(index),
             max_value: *self.parameter_max_values().get_unchecked(index),
             default_value: *self.parameter_default_values().get_unchecked(index),
-            value: *self.parameter_values().get_unchecked(index),
         }
     }
 
     #[inline]
-    pub fn parameter<T: AsRef<str>>(&self, id: T) -> Option<Parameter> {
+    pub fn static_parameter<T: AsRef<str>>(&self, id: T) -> Option<StaticParameter> {
         // SAFETY: the index from hashmap is never out of bound.
         self.get_parameter_id_index(id)
-            .map(|i| unsafe { self.get_parameter_unchecked(i) })
+            .map(|i| unsafe { self.get_static_parameter_unchecked(i) })
     }
 
     #[inline]
-    pub fn parameter_index(&self, index: usize) -> Parameter {
+    pub fn static_parameter_index(&self, index: usize) -> StaticParameter {
         assert!(index < self.parameter_count());
         // SAFETY: index has been checked.
-        unsafe { self.get_parameter_unchecked(index) }
+        unsafe { self.get_static_parameter_unchecked(index) }
     }
 
     #[inline]
-    pub fn parameters(&self) -> Vec<Parameter> {
-        self.parameters_iter().collect()
+    pub fn static_parameter_vec(&self) -> Vec<StaticParameter> {
+        self.static_parameter_iter().collect()
     }
 
     #[inline]
-    pub fn parameters_iter(&self) -> ParameterIter {
-        ParameterIter {
+    pub fn static_parameter_iter(&self) -> StaticParameterIter {
+        StaticParameterIter {
             model: self,
             len: self.parameter_count(),
             index: 0,
@@ -555,47 +554,46 @@ impl Model {
     }
 
     #[inline]
-    pub fn get_part(&self, index: usize) -> Option<Part> {
+    pub fn get_static_part(&self, index: usize) -> Option<StaticPart> {
         if index < self.part_count() {
             // SAFETY: index has been checked.
-            Some(unsafe { self.get_part_unchecked(index) })
+            Some(unsafe { self.get_static_part_unchecked(index) })
         } else {
             None
         }
     }
 
     #[inline]
-    pub unsafe fn get_part_unchecked(&self, index: usize) -> Part {
-        Part {
+    pub unsafe fn get_static_part_unchecked(&self, index: usize) -> StaticPart {
+        StaticPart {
             index,
             id: self.part_ids().get_unchecked(index).clone(),
-            opacity: *self.part_opacities().get_unchecked(index),
             part_parent_index: *self.part_parent_indices().get_unchecked(index),
         }
     }
 
     #[inline]
-    pub fn part<T: AsRef<str>>(&self, id: T) -> Option<Part> {
+    pub fn static_part<T: AsRef<str>>(&self, id: T) -> Option<StaticPart> {
         // SAFETY: the index from hashmap is never out of bound.
         self.get_part_id_index(id)
-            .map(|i| unsafe { self.get_part_unchecked(i) })
+            .map(|i| unsafe { self.get_static_part_unchecked(i) })
     }
 
     #[inline]
-    pub fn part_index(&self, index: usize) -> Part {
+    pub fn static_part_index(&self, index: usize) -> StaticPart {
         assert!(index < self.part_count());
         // SAFETY: index has been checked.
-        unsafe { self.get_part_unchecked(index) }
+        unsafe { self.get_static_part_unchecked(index) }
     }
 
     #[inline]
-    pub fn parts(&self) -> Vec<Part> {
-        self.parts_iter().collect()
+    pub fn static_part_vec(&self) -> Vec<StaticPart> {
+        self.static_part_iter().collect()
     }
 
     #[inline]
-    pub fn parts_iter(&self) -> PartIter {
-        PartIter {
+    pub fn static_part_iter(&self) -> StaticPartIter {
+        StaticPartIter {
             model: self,
             len: self.part_count(),
             index: 0,
@@ -708,18 +706,18 @@ impl Model {
     }
 
     #[inline]
-    pub fn get_static_drawable_data(&self, index: usize) -> Option<StaticDrawableData> {
+    pub fn get_static_drawable(&self, index: usize) -> Option<StaticDrawable> {
         if index < self.drawable_count() {
             // SAFETY: index has been checked.
-            Some(unsafe { self.get_static_drawable_data_unchecked(index) })
+            Some(unsafe { self.get_static_drawable_unchecked(index) })
         } else {
             None
         }
     }
 
     #[inline]
-    pub unsafe fn get_static_drawable_data_unchecked(&self, index: usize) -> StaticDrawableData {
-        StaticDrawableData {
+    pub unsafe fn get_static_drawable_unchecked(&self, index: usize) -> StaticDrawable {
+        StaticDrawable {
             index,
             id: self.drawable_ids().get_unchecked(index).clone(),
             constant_flag: *self.drawable_constant_flags().get_unchecked(index),
@@ -731,27 +729,27 @@ impl Model {
     }
 
     #[inline]
-    pub fn static_drawable_data<T: AsRef<str>>(&self, id: T) -> Option<StaticDrawableData> {
+    pub fn static_drawable<T: AsRef<str>>(&self, id: T) -> Option<StaticDrawable> {
         // SAFETY: the index from hashmap is never out of bound.
         self.get_drawable_id_index(id)
-            .map(|i| unsafe { self.get_static_drawable_data_unchecked(i) })
+            .map(|i| unsafe { self.get_static_drawable_unchecked(i) })
     }
 
     #[inline]
-    pub fn static_drawable_data_index(&self, index: usize) -> StaticDrawableData {
+    pub fn static_drawable_index(&self, index: usize) -> StaticDrawable {
         assert!(index < self.drawable_count());
         // SAFETY: index has been checked.
-        unsafe { self.get_static_drawable_data_unchecked(index) }
+        unsafe { self.get_static_drawable_unchecked(index) }
     }
 
     #[inline]
-    pub fn static_drawable_data_vec(&self) -> Vec<StaticDrawableData> {
-        self.static_drawable_data_iter().collect()
+    pub fn static_drawable_vec(&self) -> Vec<StaticDrawable> {
+        self.static_drawable_iter().collect()
     }
 
     #[inline]
-    pub fn static_drawable_data_iter(&self) -> StaticDrawableDataIter {
-        StaticDrawableDataIter {
+    pub fn static_drawable_iter(&self) -> StaticDrawableIter {
+        StaticDrawableIter {
             model: self,
             len: self.drawable_count(),
             index: 0,
@@ -759,21 +757,18 @@ impl Model {
     }
 
     #[inline]
-    pub fn get_dynamic_drawable_data(&self, index: usize) -> Result<DynamicDrawableData> {
+    pub fn get_dynamic_drawable(&self, index: usize) -> Result<DynamicDrawable> {
         if index < self.drawable_count() {
             // SAFETY: index has been checked.
-            unsafe { self.get_dynamic_drawable_data_unchecked(index) }
+            unsafe { self.get_dynamic_drawable_unchecked(index) }
         } else {
             Err(Error::InvalidDataCount("drawable dynamic"))
         }
     }
 
     #[inline]
-    pub unsafe fn get_dynamic_drawable_data_unchecked(
-        &self,
-        index: usize,
-    ) -> Result<DynamicDrawableData> {
-        Ok(DynamicDrawableData {
+    pub unsafe fn get_dynamic_drawable_unchecked(&self, index: usize) -> Result<DynamicDrawable> {
+        Ok(DynamicDrawable {
             index,
             id: self.drawable_ids().get_unchecked(index).clone(),
             dynamic_flag: *self.drawable_dynamic_flags()?.get_unchecked(index),
@@ -788,28 +783,28 @@ impl Model {
     }
 
     #[inline]
-    pub fn dynamic_drawable_data<T: AsRef<str>>(&self, id: T) -> Result<DynamicDrawableData> {
+    pub fn dynamic_drawable<T: AsRef<str>>(&self, id: T) -> Result<DynamicDrawable> {
         // SAFETY: the index from hashmap is never out of bound.
         self.get_drawable_id_index(id)
             .ok_or(Error::InvalidDataCount("drawable dynamic"))
-            .and_then(|i| unsafe { self.get_dynamic_drawable_data_unchecked(i) })
+            .and_then(|i| unsafe { self.get_dynamic_drawable_unchecked(i) })
     }
 
     #[inline]
-    pub fn dynamic_drawable_data_index(&self, index: usize) -> Result<DynamicDrawableData> {
+    pub fn dynamic_drawable_index(&self, index: usize) -> Result<DynamicDrawable> {
         assert!(index < self.drawable_count());
         // SAFETY: index has been checked.
-        unsafe { self.get_dynamic_drawable_data_unchecked(index) }
+        unsafe { self.get_dynamic_drawable_unchecked(index) }
     }
 
     #[inline]
-    pub fn dynamic_drawable_data_vec(&self) -> Result<Vec<DynamicDrawableData>> {
-        self.dynamic_drawable_data_iter().collect()
+    pub fn dynamic_drawable_vec(&self) -> Result<Vec<DynamicDrawable>> {
+        self.dynamic_drawable_iter().collect()
     }
 
     #[inline]
-    pub fn dynamic_drawable_data_iter(&self) -> DynamicDrawableDataIter {
-        DynamicDrawableDataIter {
+    pub fn dynamic_drawable_iter(&self) -> DynamicDrawableIter {
+        DynamicDrawableIter {
             model: self,
             len: self.drawable_count(),
             index: 0,
@@ -882,30 +877,29 @@ impl core::convert::TryFrom<Moc> for Model {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct Parameter {
+pub struct StaticParameter {
     pub index: usize,
     pub id: String,
     pub min_value: f32,
     pub max_value: f32,
     pub default_value: f32,
-    pub value: f32,
 }
 
 #[derive(Clone, Debug)]
-pub struct ParameterIter<'a> {
+pub struct StaticParameterIter<'a> {
     model: &'a Model,
     len: usize,
     index: usize,
 }
 
-impl<'a> Iterator for ParameterIter<'a> {
-    type Item = Parameter;
+impl<'a> Iterator for StaticParameterIter<'a> {
+    type Item = StaticParameter;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.index < self.len {
             // SAFETY: index has been checked.
-            let parameter = unsafe { self.model.get_parameter_unchecked(self.index) };
+            let parameter = unsafe { self.model.get_static_parameter_unchecked(self.index) };
             self.index += 1;
             Some(parameter)
         } else {
@@ -920,12 +914,12 @@ impl<'a> Iterator for ParameterIter<'a> {
     }
 }
 
-impl<'a> DoubleEndedIterator for ParameterIter<'a> {
+impl<'a> DoubleEndedIterator for StaticParameterIter<'a> {
     #[inline]
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.index < self.len {
             // SAFETY: it's never out of bound.
-            let parameter = unsafe { self.model.get_parameter_unchecked(self.len - 1) };
+            let parameter = unsafe { self.model.get_static_parameter_unchecked(self.len - 1) };
             self.len -= 1;
             Some(parameter)
         } else {
@@ -934,32 +928,31 @@ impl<'a> DoubleEndedIterator for ParameterIter<'a> {
     }
 }
 
-impl<'a> ExactSizeIterator for ParameterIter<'a> {}
-impl<'a> core::iter::FusedIterator for ParameterIter<'a> {}
+impl<'a> ExactSizeIterator for StaticParameterIter<'a> {}
+impl<'a> core::iter::FusedIterator for StaticParameterIter<'a> {}
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Part {
+pub struct StaticPart {
     pub index: usize,
     pub id: String,
-    pub opacity: f32,
     pub part_parent_index: PartParent,
 }
 
 #[derive(Clone, Debug)]
-pub struct PartIter<'a> {
+pub struct StaticPartIter<'a> {
     model: &'a Model,
     len: usize,
     index: usize,
 }
 
-impl<'a> Iterator for PartIter<'a> {
-    type Item = Part;
+impl<'a> Iterator for StaticPartIter<'a> {
+    type Item = StaticPart;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.index < self.len {
             // SAFETY: index has been checked.
-            let part = unsafe { self.model.get_part_unchecked(self.index) };
+            let part = unsafe { self.model.get_static_part_unchecked(self.index) };
             self.index += 1;
             Some(part)
         } else {
@@ -974,12 +967,12 @@ impl<'a> Iterator for PartIter<'a> {
     }
 }
 
-impl<'a> DoubleEndedIterator for PartIter<'a> {
+impl<'a> DoubleEndedIterator for StaticPartIter<'a> {
     #[inline]
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.index < self.len {
             // SAFETY: it's never out of bound.
-            let part = unsafe { self.model.get_part_unchecked(self.len - 1) };
+            let part = unsafe { self.model.get_static_part_unchecked(self.len - 1) };
             self.len -= 1;
             Some(part)
         } else {
@@ -988,11 +981,11 @@ impl<'a> DoubleEndedIterator for PartIter<'a> {
     }
 }
 
-impl<'a> ExactSizeIterator for PartIter<'a> {}
-impl<'a> core::iter::FusedIterator for PartIter<'a> {}
+impl<'a> ExactSizeIterator for StaticPartIter<'a> {}
+impl<'a> core::iter::FusedIterator for StaticPartIter<'a> {}
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct StaticDrawableData {
+pub struct StaticDrawable {
     pub index: usize,
     pub id: String,
     pub constant_flag: ConstantFlags,
@@ -1003,21 +996,20 @@ pub struct StaticDrawableData {
 }
 
 #[derive(Clone, Debug)]
-pub struct StaticDrawableDataIter<'a> {
+pub struct StaticDrawableIter<'a> {
     model: &'a Model,
     len: usize,
     index: usize,
 }
 
-impl<'a> Iterator for StaticDrawableDataIter<'a> {
-    type Item = StaticDrawableData;
+impl<'a> Iterator for StaticDrawableIter<'a> {
+    type Item = StaticDrawable;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.index < self.len {
             // SAFETY: index has been checked.
-            let drawable_static =
-                unsafe { self.model.get_static_drawable_data_unchecked(self.index) };
+            let drawable_static = unsafe { self.model.get_static_drawable_unchecked(self.index) };
             self.index += 1;
             Some(drawable_static)
         } else {
@@ -1032,13 +1024,12 @@ impl<'a> Iterator for StaticDrawableDataIter<'a> {
     }
 }
 
-impl<'a> DoubleEndedIterator for StaticDrawableDataIter<'a> {
+impl<'a> DoubleEndedIterator for StaticDrawableIter<'a> {
     #[inline]
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.index < self.len {
             // SAFETY: it's never out of bound.
-            let drawable_static =
-                unsafe { self.model.get_static_drawable_data_unchecked(self.len - 1) };
+            let drawable_static = unsafe { self.model.get_static_drawable_unchecked(self.len - 1) };
             self.len -= 1;
             Some(drawable_static)
         } else {
@@ -1047,11 +1038,11 @@ impl<'a> DoubleEndedIterator for StaticDrawableDataIter<'a> {
     }
 }
 
-impl<'a> ExactSizeIterator for StaticDrawableDataIter<'a> {}
-impl<'a> core::iter::FusedIterator for StaticDrawableDataIter<'a> {}
+impl<'a> ExactSizeIterator for StaticDrawableIter<'a> {}
+impl<'a> core::iter::FusedIterator for StaticDrawableIter<'a> {}
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct DynamicDrawableData {
+pub struct DynamicDrawable {
     pub index: usize,
     pub id: String,
     pub dynamic_flag: DynamicFlags,
@@ -1062,21 +1053,20 @@ pub struct DynamicDrawableData {
 }
 
 #[derive(Clone, Debug)]
-pub struct DynamicDrawableDataIter<'a> {
+pub struct DynamicDrawableIter<'a> {
     model: &'a Model,
     len: usize,
     index: usize,
 }
 
-impl<'a> Iterator for DynamicDrawableDataIter<'a> {
-    type Item = Result<DynamicDrawableData>;
+impl<'a> Iterator for DynamicDrawableIter<'a> {
+    type Item = Result<DynamicDrawable>;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.index < self.len {
             // SAFETY: index has been checked.
-            let drawable_dynamic =
-                unsafe { self.model.get_dynamic_drawable_data_unchecked(self.index) };
+            let drawable_dynamic = unsafe { self.model.get_dynamic_drawable_unchecked(self.index) };
             self.index += 1;
             Some(drawable_dynamic)
         } else {
@@ -1091,13 +1081,13 @@ impl<'a> Iterator for DynamicDrawableDataIter<'a> {
     }
 }
 
-impl<'a> DoubleEndedIterator for DynamicDrawableDataIter<'a> {
+impl<'a> DoubleEndedIterator for DynamicDrawableIter<'a> {
     #[inline]
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.index < self.len {
             // SAFETY: it's never out of bound.
             let drawable_dynamic =
-                unsafe { self.model.get_dynamic_drawable_data_unchecked(self.len - 1) };
+                unsafe { self.model.get_dynamic_drawable_unchecked(self.len - 1) };
             self.len -= 1;
             Some(drawable_dynamic)
         } else {
@@ -1106,8 +1096,8 @@ impl<'a> DoubleEndedIterator for DynamicDrawableDataIter<'a> {
     }
 }
 
-impl<'a> ExactSizeIterator for DynamicDrawableDataIter<'a> {}
-impl<'a> core::iter::FusedIterator for DynamicDrawableDataIter<'a> {}
+impl<'a> ExactSizeIterator for DynamicDrawableIter<'a> {}
+impl<'a> core::iter::FusedIterator for DynamicDrawableIter<'a> {}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Vector2 {
