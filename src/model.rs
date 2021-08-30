@@ -42,11 +42,15 @@ fn init_model(moc: *const cubism_core_sys::csmMoc) -> Result<AlignedBytes> {
 
 #[derive(Clone, Debug)]
 struct StaticData {
-    /// the ID of the parameter
+    /// the IDs of parameters
     parameter_ids: Vec<String>,
+    /// hashmap of parameters' id/index
     parameter_ids_map: HashMap<String, usize>,
+    /// the minimum values of parameters
     parameter_min_values: Vec<f32>,
+    /// the maximum values of parameters
     parameter_max_values: Vec<f32>,
+    /// the default values of parameters
     parameter_default_values: Vec<f32>,
     part_ids: Vec<String>,
     part_ids_map: HashMap<String, usize>,
@@ -335,7 +339,7 @@ impl Model {
     }
 
     #[inline]
-    pub fn from_model(model: Self) -> Result<Self> {
+    pub fn new_from_model(model: Self) -> Result<Self> {
         Self::new(model.moc())
     }
 
@@ -841,7 +845,6 @@ impl Model {
 }
 
 impl Clone for Model {
-    #[inline]
     fn clone(&self) -> Self {
         let moc = self.moc();
         let mut model =

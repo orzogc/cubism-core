@@ -1,7 +1,7 @@
 [package]
 name = "cubism-core"
 version = "0.1.0"
-authors = ["orzogc <orzogc@163.com>"]
+authors = ["orzogc"]
 edition = "2018"
 
 [workspace]
@@ -9,14 +9,14 @@ members = ["cubism-core-sys"]
 
 [dependencies]
 aligned-utils = "1.0.2"
-bitflags = "1.2.1"
+bitflags = "1.3.2"
 cubism-core-sys = { version = "0.1.0", path = "cubism-core-sys", default-features = false }
 
 [features]
 default = ["static"]
 static = ["cubism-core-sys/static"]
 dynamic = ["cubism-core-sys/dynamic"]
-doc = ["cubism-core-sys/doc_only"] # just for docs.rs and rust-analyzer
+doc = ["cubism-core-sys/doc"] # just for docs.rs and rust-analyzer
 
 [package.metadata.docs.rs]
 features = [ "doc" ]

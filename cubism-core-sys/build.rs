@@ -1,17 +1,21 @@
-use bindgen;
-use std::env;
-use std::path::PathBuf;
+use std::{env, path::PathBuf};
+
+const LIVE2D_CUBISM: &str = "LIVE2D_CUBISM";
+const STATIC: &str = "static";
 
 fn main() {
-    if cfg!(feature = "doc_only") {
+    if cfg!(feature = "doc") {
         return;
     }
 
-    let cubism_dir = env::var("LIVE2D_CUBISM").expect(
-        "The environment variable `LIVE2D_CUBISM` is not set properly. \
-        `LIVE2D_CUBISM` should be set to the Live2D Cubism directory.",
-    );
-    println!("cargo:rerun-if-env-changed=LIVE2D_CUBISM");
+    let cubism_dir = env::var(LIVE2D_CUBISM).unwrap_or_else(|_| {
+        panic!(
+            "The environment variable `{0}` is not set properly. \
+            `{0}` should be set to the Live2D Cubism directory.",
+            LIVE2D_CUBISM
+        )
+    });
+    println!("cargo:rerun-if-env-changed={}", LIVE2D_CUBISM);
 
     let mut lib_dir = PathBuf::from(cubism_dir);
     if !lib_dir.exists() {
@@ -34,6 +38,11 @@ fn main() {
     bindings
         .write_to_file(out_path.join("cubism_core.rs"))
         .expect("failed to write bindings");
+    let mut bindgen_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    bindgen_dir.push("bindgen");
+    bindings
+        .write_to_file(bindgen_dir.join("cubism_core.rs"))
+        .expect("failed to write the bindgen file");
 
     let profile = env::var("PROFILE").unwrap();
     let target = env::var("TARGET").unwrap();
@@ -48,17 +57,17 @@ fn main() {
     };
 
     let link = if cfg!(feature = "static") && !cfg!(feature = "dynamic") {
-        "static"
+        STATIC
     } else {
         "dylib"
     };
-    if link == "static" {
+    if link == STATIC {
         lib_dir.push("lib");
     } else {
         lib_dir.push("dll");
     }
 
-    let mut runtime = String::new();
+    let mut windows_runtime = String::new();
 
     match (vendor, sys) {
         ("apple", "darwin") => {
@@ -68,7 +77,7 @@ fn main() {
             lib_dir.push("macos");
         }
         ("apple", "ios") => {
-            if link != "static" {
+            if link != STATIC {
                 panic!("no dynamic lib support for iOS");
             }
             lib_dir.push("ios");
@@ -78,7 +87,7 @@ fn main() {
             } else {
                 ios_dir.push_str("Debug-");
             }
-            let ios = env::var("IOS_BUILD").unwrap_or("device".to_string());
+            let ios = env::var("IOS_BUILD").unwrap_or_else(|_| "device".to_string());
             match ios.as_str() {
                 "device" => {
                     if arch != "aarch64" {
@@ -102,7 +111,7 @@ fn main() {
                 "i686" => "x86",
                 "armv7" => "armeabi-v7a",
                 "aarch64" => "arm64-v8a",
-                _ => panic!("only support i686, armv7 and aarch64 for Android"),
+                _ => panic!("only support i686, armv7 or aarch64 for Android"),
             });
         }
         ("pc", "windows") => {
@@ -110,21 +119,21 @@ fn main() {
             lib_dir.push(match arch {
                 "i586" | "i686" => "x86",
                 "x86_64" => "x86_64",
-                _ => panic!("only support i586/i686 and x86_64 for Windows"),
+                _ => panic!("only support i586, i686 or x86_64 for Windows"),
             });
-            if link == "static" {
+            if link == STATIC {
                 if abi != "msvc" {
                     panic!("need msvc ABI to link Live2D Cubism Core's Windows static lib");
                 }
-                let msvc = env::var("VISUAL_STUDIO_VERSION").unwrap_or("140".to_string());
+                let msvc = env::var("VISUAL_STUDIO_VERSION").unwrap_or_else(|_| "140".to_string());
                 match msvc.as_str() {
                     "120" | "140" | "141" | "142" => lib_dir.push(msvc),
                     _ => panic!("unsupported Visual Studio version: {}", msvc),
                 }
-                let runtime_lib = env::var("RUNTIME_LIB").unwrap_or("MT".to_string());
+                let runtime_lib = env::var("RUNTIME_LIB").unwrap_or_else(|_| "MT".to_string());
                 match runtime_lib.as_str() {
-                    "MD" => runtime.push_str("Live2DCubismCore_MD"),
-                    "MT" => runtime.push_str("Live2DCubismCore_MT"),
+                    "MD" => windows_runtime.push_str("Live2DCubismCore_MD"),
+                    "MT" => windows_runtime.push_str("Live2DCubismCore_MT"),
                     _ => panic!("unsupported run-time library: {}", runtime_lib),
                 }
             }
@@ -143,7 +152,7 @@ fn main() {
             }
         },
         ("uwp", "windows") => {
-            if link == "static" {
+            if link == STATIC {
                 panic!("no static lib support for UWP")
             }
             lib_dir.push("experimental");
@@ -165,11 +174,11 @@ fn main() {
     println!("cargo:rustc-link-search=all={}", lib_dir.display());
 
     match (link, vendor, sys, profile.as_str()) {
-        ("static", "pc", "windows", "debug") => {
-            println!("cargo:rustc-link-lib={}={}d", link, runtime)
+        (STATIC, "pc", "windows", "debug") => {
+            println!("cargo:rustc-link-lib={}={}d", link, windows_runtime)
         }
-        ("static", "pc", "windows", "release") => {
-            println!("cargo:rustc-link-lib={}={}", link, runtime)
+        (STATIC, "pc", "windows", "release") => {
+            println!("cargo:rustc-link-lib={}={}", link, windows_runtime)
         }
         _ => println!("cargo:rustc-link-lib={}=Live2DCubismCore", link),
     }

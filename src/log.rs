@@ -5,12 +5,8 @@ type LogFunction = unsafe extern "C" fn(message: *const i8);
 pub trait Logger {
     fn log(message: &str);
 
-    extern "C" fn log_callback(message: *const i8) {
-        Self::log(
-            unsafe { CStr::from_ptr(message) }
-                .to_string_lossy()
-                .as_ref(),
-        )
+    unsafe extern "C" fn log_callback(message: *const i8) {
+        Self::log(CStr::from_ptr(message).to_string_lossy().as_ref())
     }
 }
 

@@ -1,19 +1,19 @@
 [package]
 name = "cubism-core-sys"
 version = "0.1.0"
-authors = ["orzogc <orzogc@163.com>"]
+authors = ["orzogc"]
 edition = "2018"
 build = "build.rs"
 links = "Live2DCubismCore"
 
 [build-dependencies]
-bindgen = "0.58.1"
+bindgen = "0.59.1"
 
 [features]
 default = ["static"]
 static = []
 dynamic = [] # for force to link cubism core's dynamic lib
-doc_only = [] # just for docs.rs and rust-analyzer
+doc = [] # just for docs.rs and rust-analyzer
 
 [package.metadata.docs.rs]
-features = [ "doc_only" ]
+features = [ "doc" ]

@@ -2,22 +2,22 @@
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
 
-#[cfg(not(feature = "doc_only"))]
+#[cfg(not(feature = "doc"))]
 include!(concat!(env!("OUT_DIR"), "/cubism_core.rs"));
 
-#[cfg(feature = "doc_only")]
+#[cfg(feature = "doc")]
 include!("../bindgen/cubism_core.rs");
 
-/// Cubism moc.
+/// Cubism moc
 #[repr(C, align(64))]
-#[derive(Debug, Copy, Clone)]
+#[derive(Clone, Copy, Debug)]
 pub struct csmMoc {
     _unused: [u8; 0],
 }
 
-/// Cubism model.
+/// Cubism model
 #[repr(C, align(16))]
-#[derive(Debug, Copy, Clone)]
+#[derive(Clone, Copy, Debug)]
 pub struct csmModel {
     _unused: [u8; 0],
 }
