@@ -1,31 +1,47 @@
-use std::ffi::CStr;
+use std::{borrow::Cow, ffi::CStr, os::raw::c_char};
 
-type LogFunction = unsafe extern "C" fn(message: *const i8);
+/// Log function type.
+pub type LogFunction = unsafe extern "C" fn(message: *const c_char);
 
+/// Logger trait.
+/// Implementing this trait for setting the logger in Cubism Core lib.
 pub trait Logger {
-    fn log(message: &str);
+    /// Log the message.
+    fn log<'a>(message: impl Into<Cow<'a, str>>);
 
-    unsafe extern "C" fn log_callback(message: *const i8) {
-        Self::log(CStr::from_ptr(message).to_string_lossy().as_ref())
+    /// Log function for Cubism Core lib to callback.
+    /// For most cases, there's no need to implement it.
+    ///
+    /// # Safety
+    ///
+    /// `message` is a pointer to a C string.
+    #[inline]
+    unsafe extern "C" fn log_callback(message: *const c_char) {
+        Self::log(CStr::from_ptr(message).to_string_lossy())
     }
 }
 
+/// Default logger. Just print message to the console.
 #[derive(Clone, Copy, Debug)]
 pub struct DefaultLogger;
 
 impl Logger for DefaultLogger {
     #[inline]
-    fn log(message: &str) {
-        println!("{}", message);
+    fn log<'a>(message: impl Into<Cow<'a, str>>) {
+        println!("cubism: {}", message.into());
     }
 }
 
+/// Sets the logger in Cubism Core lib.
+#[inline]
 pub fn set_logger<T: Logger>(_: T) {
     unsafe {
         cubism_core_sys::csmSetLogFunction(Some(T::log_callback));
     }
 }
 
+/// Gets the logger function in Cubism Core lib.
+#[inline]
 pub fn get_logger() -> Option<LogFunction> {
     unsafe { cubism_core_sys::csmGetLogFunction() }
 }

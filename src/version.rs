@@ -1,55 +1,56 @@
-/// Cubism version identifier.
+/// Cubism Core version.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct CubismVersion {
-    pub version_number: usize,
-    pub major: usize,
-    pub minor: usize,
-    pub patch: usize,
+    pub version: u32,
+    pub major: u8,
+    pub minor: u8,
+    pub patch: u16,
 }
 
 impl CubismVersion {
     /// Queries Cubism Core version.
     #[inline]
     pub fn version() -> Self {
-        let version_number = unsafe { cubism_core_sys::csmGetVersion() };
+        let version = unsafe { cubism_core_sys::csmGetVersion() };
 
         Self {
-            version_number: version_number as _,
-            major: ((version_number & 0xFF00_0000) >> 24) as _,
-            minor: ((version_number & 0x00FF_0000) >> 16) as _,
-            patch: (version_number & 0x0000_FFFF) as _,
+            version,
+            major: ((version & 0xFF00_0000) >> 24) as _,
+            minor: ((version & 0x00FF_0000) >> 16) as _,
+            patch: (version & 0x0000_FFFF) as _,
         }
     }
 }
 
-impl core::fmt::Display for CubismVersion {
+impl std::fmt::Display for CubismVersion {
     #[inline]
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "{}.{}.{} ({})",
-            self.major, self.minor, self.patch, self.version_number
+            self.major, self.minor, self.patch, self.version
         )
     }
 }
 
-/// moc3 version identifier.
+/// `moc3` file format version.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum MocVersion {
-    /// moc3 file version 3.0.00 - 3.2.07
+    /// `moc3` file version 3.0.00 - 3.2.07
     Version30,
-    /// moc3 file version 3.3.00 - 3.3.03
+    /// `moc3` file version 3.3.00 - 3.3.03
     Version33,
-    /// moc3 file version 4.0.00
+    /// `moc3` file version 4.0.00
     Version40,
-    /// unknown moc3 file version
+    /// unknown `moc3` file version
     VersionUnknown,
 }
 
 impl MocVersion {
+    /// Creates [`MocVersion`].
     #[inline]
-    pub(crate) fn version(v: cubism_core_sys::csmMocVersion) -> Self {
-        match v {
+    pub fn new(version: cubism_core_sys::csmMocVersion) -> Self {
+        match version {
             1 => MocVersion::Version30,
             2 => MocVersion::Version33,
             3 => MocVersion::Version40,
@@ -57,34 +58,41 @@ impl MocVersion {
         }
     }
 
-    /// Gets Moc file supported latest version.
+    /// Gets latest version which `moc3` file is supported.
     #[inline]
-    pub fn get_latest_version() -> Self {
-        Self::version(unsafe { cubism_core_sys::csmGetLatestMocVersion() })
+    pub fn latest_version() -> Self {
+        unsafe { cubism_core_sys::csmGetLatestMocVersion().into() }
     }
 
-    /// Returns `true` if the `MocVersion` is [`Version30`](MocVersion::Version30).
+    /// Returns `true` if the [`MocVersion`] is [`Version30`](MocVersion::Version30).
     #[inline]
-    pub fn is_version30(&self) -> bool {
-        matches!(self, Self::Version30)
+    pub fn is_version30(self) -> bool {
+        self == Self::Version30
     }
 
-    /// Returns `true` if the `MocVersion` is [`Version33`](MocVersion::Version33).
+    /// Returns `true` if the [`MocVersion`] is [`Version33`](MocVersion::Version33).
     #[inline]
-    pub fn is_version33(&self) -> bool {
-        matches!(self, Self::Version33)
+    pub fn is_version33(self) -> bool {
+        self == Self::Version33
     }
 
-    /// Returns `true` if the `MocVersion` is [`Version40`](MocVersion::Version40).
+    /// Returns `true` if the [`MocVersion`] is [`Version40`](MocVersion::Version40).
     #[inline]
-    pub fn is_version40(&self) -> bool {
-        matches!(self, Self::Version40)
+    pub fn is_version40(self) -> bool {
+        self == Self::Version40
     }
 
-    /// Returns `true` if the `MocVersion` is [`VersionUnknown`](MocVersion::VersionUnknown).
+    /// Returns `true` if the [`MocVersion`] is [`VersionUnknown`](MocVersion::VersionUnknown).
     #[inline]
-    pub fn is_version_unknown(&self) -> bool {
-        matches!(self, Self::VersionUnknown)
+    pub fn is_version_unknown(self) -> bool {
+        self == Self::VersionUnknown
+    }
+}
+
+impl From<cubism_core_sys::csmMocVersion> for MocVersion {
+    #[inline]
+    fn from(version: cubism_core_sys::csmMocVersion) -> Self {
+        Self::new(version)
     }
 }
 
@@ -96,14 +104,14 @@ mod tests {
     fn test_cubism_version() {
         let version = CubismVersion::version();
         assert_eq!(
-            version.version_number as usize,
-            (version.major << 24) + (version.minor << 16) + version.patch
+            version.version,
+            ((version.major as u32) << 24) + ((version.minor as u32) << 16) + version.patch as u32
         );
     }
 
     #[test]
     fn test_moc_version() {
-        let latest_version = MocVersion::get_latest_version();
+        let latest_version = MocVersion::latest_version();
         assert!(latest_version.is_version40());
     }
 }

@@ -1,56 +1,94 @@
-use crate::error::{Error, Result};
-use crate::flags::{ConstantFlags, DynamicFlags};
-use crate::moc::Moc;
-use crate::ALIGN_OF_MODEL;
+use crate::{
+    Error, Moc, Result, ALIGN_OF_MODEL, {ConstantFlags, DynamicFlags},
+};
 use aligned_utils::bytes::AlignedBytes;
-use core::ptr::NonNull;
-use core::slice::{from_raw_parts, from_raw_parts_mut};
-use std::collections::HashMap;
-use std::ffi::CStr;
+use std::{
+    collections::HashMap,
+    ffi::CStr,
+    mem,
+    os::raw::{c_char, c_int},
+    ptr::NonNull,
+    slice,
+};
 
 #[inline]
 fn get_slice<'a, T>(ptr: *const T, len: usize) -> Option<&'a [T]> {
-    if ptr.is_null() {
+    if ptr.is_null() || len * mem::size_of::<T>() > isize::MAX as usize {
         None
     } else {
         // SAFETY: it's safe here because the memory of a C/C++ array is contiguous.
-        Some(unsafe { from_raw_parts(ptr, len) })
+        unsafe { Some(slice::from_raw_parts(ptr, len)) }
     }
 }
 
 #[inline]
 fn get_mut_slice<'a, T>(ptr: *mut T, len: usize) -> Option<&'a mut [T]> {
-    if ptr.is_null() {
+    if ptr.is_null() || len * mem::size_of::<T>() > isize::MAX as usize {
         None
     } else {
         // SAFETY: it's safe here because the memory of a C/C++ array is contiguous.
-        Some(unsafe { from_raw_parts_mut(ptr, len) })
+        unsafe { Some(slice::from_raw_parts_mut(ptr, len)) }
     }
 }
 
 fn init_model(moc: *const cubism_core_sys::csmMoc) -> Result<AlignedBytes> {
     let size = unsafe { cubism_core_sys::csmGetSizeofModel(moc) };
-    let mut model = AlignedBytes::new_zeroed(size as _, ALIGN_OF_MODEL);
-    if unsafe { cubism_core_sys::csmInitializeModelInPlace(moc, model.as_mut_ptr() as _, size) }
-        .is_null()
-    {
-        Err(Error::InitializeModelError)
-    } else {
-        Ok(model)
+    if size == 0 {
+        return Err(Error::InitializeModelError);
     }
+    let mut model = AlignedBytes::new_zeroed(size as _, ALIGN_OF_MODEL);
+    debug_assert_eq!(model.len(), size as _);
+
+    unsafe {
+        if cubism_core_sys::csmInitializeModelInPlace(moc, model.as_mut_ptr() as _, size).is_null()
+        {
+            Err(Error::InitializeModelError)
+        } else {
+            Ok(model)
+        }
+    }
+}
+
+#[inline]
+fn check_count(i: c_int) -> Option<usize> {
+    if i < 0 {
+        None
+    } else {
+        Some(i as usize)
+    }
+}
+
+#[inline]
+fn get_ids(ptr: *const *const c_char, len: usize) -> Option<Vec<String>> {
+    get_slice(ptr, len).and_then(|s| {
+        s.iter()
+            .map(|&ptr| {
+                if ptr.is_null() {
+                    None
+                } else {
+                    // SAFETY: it's safe here because the pointer points to a C string
+                    // according to the Cubism Core doc.
+                    unsafe { Some(CStr::from_ptr(ptr).to_string_lossy().into_owned()) }
+                }
+            })
+            .collect()
+    })
+}
+
+#[inline]
+fn get_ids_map(ids: &[String]) -> HashMap<String, usize> {
+    ids.iter()
+        .enumerate()
+        .map(|(i, s)| (s.clone(), i))
+        .collect()
 }
 
 #[derive(Clone, Debug)]
 struct StaticData {
-    /// the IDs of parameters
     parameter_ids: Vec<String>,
-    /// hashmap of parameters' id/index
     parameter_ids_map: HashMap<String, usize>,
-    /// the minimum values of parameters
     parameter_min_values: Vec<f32>,
-    /// the maximum values of parameters
     parameter_max_values: Vec<f32>,
-    /// the default values of parameters
     parameter_default_values: Vec<f32>,
     part_ids: Vec<String>,
     part_ids_map: HashMap<String, usize>,
@@ -66,78 +104,45 @@ struct StaticData {
 }
 
 impl StaticData {
-    fn new(model: *const cubism_core_sys::csmModel) -> Result<Self> {
-        let check_count = |i| if i < 0 { None } else { Some(i as usize) };
-        let get_ids = |ptr: *const *const i8, len| -> Option<Vec<_>> {
-            if ptr.is_null() {
-                None
-            } else {
-                // SAFETY: it's safe here because the memory of a C/C++ array is contiguous.
-                unsafe { from_raw_parts(ptr, len) }
-                    .iter()
-                    .map(|&ptr| {
-                        if ptr.is_null() {
-                            None
-                        } else {
-                            Some(
-                                // SAFETY: it's safe here because the pointer points to a C string.
-                                unsafe { CStr::from_ptr(ptr) }
-                                    .to_string_lossy()
-                                    .into_owned(),
-                            )
-                        }
-                    })
-                    .collect()
-            }
-        };
-        let get_ids_map = |ids: &[String]| {
-            ids.iter()
-                .enumerate()
-                .map(|(i, s)| (s.clone(), i))
-                .collect()
-        };
-
-        let parameter_count = check_count(unsafe { cubism_core_sys::csmGetParameterCount(model) })
+    unsafe fn new(model: *const cubism_core_sys::csmModel) -> Result<Self> {
+        let parameter_count = check_count(cubism_core_sys::csmGetParameterCount(model))
             .ok_or(Error::InvalidDataCount("parameter"))?;
-        let part_count = check_count(unsafe { cubism_core_sys::csmGetPartCount(model) })
+        let part_count = check_count(cubism_core_sys::csmGetPartCount(model))
             .ok_or(Error::InvalidDataCount("part"))?;
-        let drawable_count = check_count(unsafe { cubism_core_sys::csmGetDrawableCount(model) })
+        let drawable_count = check_count(cubism_core_sys::csmGetDrawableCount(model))
             .ok_or(Error::InvalidDataCount("drawable"))?;
 
-        let parameter_ids = get_ids(
-            unsafe { cubism_core_sys::csmGetParameterIds(model) },
-            parameter_count,
-        )
-        .ok_or(Error::GetDataError("parameter ids"))?;
-        let parameter_ids_map = get_ids_map(parameter_ids.as_slice());
+        let parameter_ids = get_ids(cubism_core_sys::csmGetParameterIds(model), parameter_count)
+            .ok_or(Error::GetDataError("parameter ids"))?;
+        let parameter_ids_map = get_ids_map(&parameter_ids);
 
         let parameter_min_values = get_slice(
-            unsafe { cubism_core_sys::csmGetParameterMinimumValues(model) },
+            cubism_core_sys::csmGetParameterMinimumValues(model),
             parameter_count,
         )
         .ok_or(Error::GetDataError("parameter min values"))?
         .to_vec();
 
         let parameter_max_values = get_slice(
-            unsafe { cubism_core_sys::csmGetParameterMaximumValues(model) },
+            cubism_core_sys::csmGetParameterMaximumValues(model),
             parameter_count,
         )
         .ok_or(Error::GetDataError("parameter max values"))?
         .to_vec();
 
         let parameter_default_values = get_slice(
-            unsafe { cubism_core_sys::csmGetParameterDefaultValues(model) },
+            cubism_core_sys::csmGetParameterDefaultValues(model),
             parameter_count,
         )
         .ok_or(Error::GetDataError("parameter default values"))?
         .to_vec();
 
-        let part_ids = get_ids(unsafe { cubism_core_sys::csmGetPartIds(model) }, part_count)
+        let part_ids = get_ids(cubism_core_sys::csmGetPartIds(model), part_count)
             .ok_or(Error::GetDataError("part ids"))?;
-        let part_ids_map = get_ids_map(part_ids.as_slice());
+        let part_ids_map = get_ids_map(&part_ids);
 
         let part_parent_indices = get_slice(
-            unsafe { cubism_core_sys::csmGetPartParentPartIndices(model) },
+            cubism_core_sys::csmGetPartParentPartIndices(model),
             part_count,
         )
         .ok_or(Error::GetDataError("part parent indices"))?
@@ -145,15 +150,12 @@ impl StaticData {
         .map(|&i| PartParent::new(i))
         .collect::<Result<_>>()?;
 
-        let drawable_ids = get_ids(
-            unsafe { cubism_core_sys::csmGetDrawableIds(model) },
-            drawable_count,
-        )
-        .ok_or(Error::GetDataError("drawable ids"))?;
-        let drawable_ids_map = get_ids_map(drawable_ids.as_slice());
+        let drawable_ids = get_ids(cubism_core_sys::csmGetDrawableIds(model), drawable_count)
+            .ok_or(Error::GetDataError("drawable ids"))?;
+        let drawable_ids_map = get_ids_map(&drawable_ids);
 
         let drawable_constant_flags = get_slice(
-            unsafe { cubism_core_sys::csmGetDrawableConstantFlags(model) },
+            cubism_core_sys::csmGetDrawableConstantFlags(model),
             drawable_count,
         )
         .ok_or(Error::GetDataError("drawable constant flags"))?
@@ -162,39 +164,35 @@ impl StaticData {
         .collect::<Result<_>>()?;
 
         let drawable_texture_indices = get_slice(
-            unsafe { cubism_core_sys::csmGetDrawableTextureIndices(model) },
+            cubism_core_sys::csmGetDrawableTextureIndices(model),
             drawable_count,
         )
         .ok_or(Error::GetDataError("drawable texture indices"))?
         .to_vec();
 
         let drawable_marks = get_slice(
-            unsafe { cubism_core_sys::csmGetDrawableMaskCounts(model) },
+            cubism_core_sys::csmGetDrawableMaskCounts(model),
             drawable_count,
         )
         .ok_or(Error::GetDataError("drawable mask counts"))?
         .iter()
         .zip(
-            get_slice(
-                unsafe { cubism_core_sys::csmGetDrawableMasks(model) },
-                drawable_count,
-            )
-            .ok_or(Error::GetDataError("drawable masks"))?,
+            get_slice(cubism_core_sys::csmGetDrawableMasks(model), drawable_count)
+                .ok_or(Error::GetDataError("drawable masks"))?,
         )
         .map(|(&c, &p)| {
             if c < 0 {
                 Err(Error::InvalidDataCount("drawable mask"))
-            } else if p.is_null() {
-                Err(Error::GetDataError("drawable masks because null pointer"))
             } else {
-                // SAFETY: it's safe here because the memory of a C/C++ array is contiguous.
-                Ok(unsafe { from_raw_parts(p, c as _) }.to_vec())
+                get_slice(p, c as _)
+                    .map(|s| s.to_vec())
+                    .ok_or(Error::GetDataError("drawable masks"))
             }
         })
         .collect::<Result<_>>()?;
 
         let drawable_vertex_counts = get_slice(
-            unsafe { cubism_core_sys::csmGetDrawableVertexCounts(model) },
+            cubism_core_sys::csmGetDrawableVertexCounts(model),
             drawable_count,
         )
         .ok_or(Error::GetDataError("drawable vertex counts"))?
@@ -207,48 +205,36 @@ impl StaticData {
             .iter()
             .zip(
                 get_slice(
-                    unsafe { cubism_core_sys::csmGetDrawableVertexUvs(model) },
+                    cubism_core_sys::csmGetDrawableVertexUvs(model),
                     drawable_count,
                 )
                 .ok_or(Error::GetDataError("drawable vertex uvs"))?,
             )
-            .map(|(&c, &p)| {
-                if p.is_null() {
-                    Err(Error::GetDataError(
-                        "drawable vertex uvs because null pointer",
-                    ))
-                } else {
-                    // SAFETY: it's safe here because the memory of a C/C++ array is contiguous.
-                    Ok(unsafe { from_raw_parts(p, c) }
-                        .iter()
-                        .map(|&v| Vector2::new(v))
-                        .collect())
-                }
-            })
-            .collect::<Result<_>>()?;
+            .map(|(&c, &p)| get_slice(p, c).map(|s| s.iter().map(|&v| Vector2::new(v)).collect()))
+            .collect::<Option<_>>()
+            .ok_or(Error::GetDataError("drawable vertex uvs"))?;
 
         let drawable_indices = get_slice(
-            unsafe { cubism_core_sys::csmGetDrawableIndexCounts(model) },
+            cubism_core_sys::csmGetDrawableIndexCounts(model),
             drawable_count,
         )
         .ok_or(Error::GetDataError("drawable index counts"))?
         .iter()
         .zip(
             get_slice(
-                unsafe { cubism_core_sys::csmGetDrawableIndices(model) },
+                cubism_core_sys::csmGetDrawableIndices(model),
                 drawable_count,
             )
             .ok_or(Error::GetDataError("drawable indices"))?,
         )
         .map(|(&c, &p)| {
-            // the official doc say it should be 0 or a multiple of 3.
+            // the Cubism Core doc indicate it should be 0 or a multiple of 3.
             if c < 0 || c % 3 != 0 {
                 Err(Error::InvalidDataCount("drawable indices"))
-            } else if p.is_null() {
-                Err(Error::GetDataError("drawable indices because null pointer"))
             } else {
-                // SAFETY: it's safe here because the memory of a C/C++ array is contiguous.
-                Ok(unsafe { from_raw_parts(p, c as _) }.to_vec())
+                get_slice(p, c as _)
+                    .map(|s| s.to_vec())
+                    .ok_or(Error::GetDataError("drawable indices"))
             }
         })
         .collect::<Result<_>>()?;
@@ -281,24 +267,21 @@ struct MutableData {
 }
 
 impl MutableData {
-    fn new(
+    unsafe fn new(
         model: *mut cubism_core_sys::csmModel,
         parameter_count: usize,
         part_count: usize,
     ) -> Result<Self> {
         let parameter_values = NonNull::from(
             get_mut_slice(
-                unsafe { cubism_core_sys::csmGetParameterValues(model) },
+                cubism_core_sys::csmGetParameterValues(model),
                 parameter_count,
             )
             .ok_or(Error::GetDataError("parameter values"))?,
         );
         let part_opacities = NonNull::from(
-            get_mut_slice(
-                unsafe { cubism_core_sys::csmGetPartOpacities(model) },
-                part_count,
-            )
-            .ok_or(Error::GetDataError("part opacities"))?,
+            get_mut_slice(cubism_core_sys::csmGetPartOpacities(model), part_count)
+                .ok_or(Error::GetDataError("part opacities"))?,
         );
 
         Ok(Self {
@@ -308,6 +291,7 @@ impl MutableData {
     }
 }
 
+// SAFETY: TODO
 unsafe impl Send for MutableData {}
 unsafe impl Sync for MutableData {}
 
@@ -322,20 +306,22 @@ pub struct Model {
 
 impl Model {
     pub fn new(moc: Moc) -> Result<Self> {
-        let mut model = init_model(moc.as_moc_ptr())?;
-        let static_data = StaticData::new(model.as_ptr() as _)?;
-        let mut_data = MutableData::new(
-            model.as_mut_ptr() as _,
-            static_data.parameter_ids.len(),
-            static_data.part_ids.len(),
-        )?;
+        unsafe {
+            let mut model = init_model(moc.as_moc_ptr())?;
+            let static_data = StaticData::new(model.as_ptr() as _)?;
+            let mut_data = MutableData::new(
+                model.as_mut_ptr() as _,
+                static_data.parameter_ids.len(),
+                static_data.part_ids.len(),
+            )?;
 
-        Ok(Self {
-            model,
-            moc,
-            static_data,
-            mut_data,
-        })
+            Ok(Self {
+                model,
+                moc,
+                static_data,
+                mut_data,
+            })
+        }
     }
 
     #[inline]
@@ -349,12 +335,12 @@ impl Model {
     }
 
     #[inline]
-    fn as_model_ptr(&self) -> *const cubism_core_sys::csmModel {
+    pub fn as_model_ptr(&self) -> *const cubism_core_sys::csmModel {
         self.model.as_ptr() as _
     }
 
     #[inline]
-    fn as_model_mut_ptr(&mut self) -> *mut cubism_core_sys::csmModel {
+    pub fn as_model_mut_ptr(&mut self) -> *mut cubism_core_sys::csmModel {
         self.model.as_mut_ptr() as _
     }
 
@@ -365,27 +351,27 @@ impl Model {
 
     #[inline]
     pub fn parameter_ids(&self) -> &[String] {
-        self.static_data.parameter_ids.as_slice()
+        &self.static_data.parameter_ids
     }
 
     #[inline]
-    pub fn get_parameter_id_index<T: AsRef<str>>(&self, id: T) -> Option<usize> {
+    pub fn parameter_index<T: AsRef<str>>(&self, id: T) -> Option<usize> {
         self.static_data.parameter_ids_map.get(id.as_ref()).copied()
     }
 
     #[inline]
     pub fn parameter_min_values(&self) -> &[f32] {
-        self.static_data.parameter_min_values.as_slice()
+        &self.static_data.parameter_min_values
     }
 
     #[inline]
     pub fn parameter_max_values(&self) -> &[f32] {
-        self.static_data.parameter_max_values.as_slice()
+        &self.static_data.parameter_max_values
     }
 
     #[inline]
     pub fn parameter_default_values(&self) -> &[f32] {
-        self.static_data.parameter_default_values.as_slice()
+        &self.static_data.parameter_default_values
     }
 
     #[inline]
@@ -401,24 +387,36 @@ impl Model {
     }
 
     #[inline]
-    pub fn set_parameter_values<T: AsRef<[f32]>>(&mut self, values: T) {
-        self.parameter_values_mut().copy_from_slice(values.as_ref());
+    pub fn parameter_value<T: AsRef<str>>(&self, id: T) -> Option<f32> {
+        Some(self.parameter_values()[self.parameter_index(id)?])
+    }
+
+    #[inline]
+    pub fn set_parameter_values<T: AsRef<[f32]>>(&mut self, values: T) -> Result<()> {
+        let values = values.as_ref();
+        if self.parameter_count() != values.len() {
+            Err(Error::SliceLengthNotEqual(
+                self.parameter_count(),
+                values.len(),
+            ))
+        } else {
+            self.parameter_values_mut().copy_from_slice(values);
+            Ok(())
+        }
     }
 
     /// If it fails, it returns `None`, otherwise returns the old value.
     #[inline]
     pub fn set_parameter_value<T: AsRef<str>>(&mut self, id: T, value: f32) -> Option<f32> {
-        let index = self.get_parameter_id_index(id)?;
         // SAFETY: the index from hashmap is never out of bound.
-        Some(unsafe { self.set_parameter_value_index_unchecked(index, value) })
+        unsafe { Some(self.set_parameter_value_index_unchecked(self.parameter_index(id)?, value)) }
     }
 
-    /// If it fails, it returns `None`, otherwise returns the old value.
     #[inline]
     pub fn set_parameter_value_index(&mut self, index: usize, value: f32) -> Option<f32> {
         if index < self.parameter_count() {
-            // SAFETY: index has been checked.
-            Some(unsafe { self.set_parameter_value_index_unchecked(index, value) })
+            // SAFETY: the index has been checked.
+            unsafe { Some(self.set_parameter_value_index_unchecked(index, value)) }
         } else {
             None
         }
@@ -426,31 +424,27 @@ impl Model {
 
     #[inline]
     pub unsafe fn set_parameter_value_index_unchecked(&mut self, index: usize, value: f32) -> f32 {
-        //let value = value
-        //    .max(*self.parameter_min_values().get_unchecked(index))
-        //    .min(*self.parameter_max_values().get_unchecked(index));
-        core::mem::replace(self.parameter_values_mut().get_unchecked_mut(index), value)
+        std::mem::replace(self.parameter_values_mut().get_unchecked_mut(index), value)
     }
 
     #[inline]
-    pub fn parameter_value_index(&mut self, index: usize, value: f32) -> f32 {
-        assert!(index < self.parameter_count());
-        // SAFETY: index has been checked.
-        unsafe { self.set_parameter_value_index_unchecked(index, value) }
+    pub fn static_parameter<T: AsRef<str>>(&self, id: T) -> Option<StaticParameter> {
+        // SAFETY: the index from hashmap is never out of bound.
+        unsafe { Some(self.static_parameter_index_unchecked(self.parameter_index(id)?)) }
     }
 
     #[inline]
-    pub fn get_static_parameter(&self, index: usize) -> Option<StaticParameter> {
+    pub fn static_parameter_index(&self, index: usize) -> Option<StaticParameter> {
         if index < self.parameter_count() {
-            // SAFETY: index has been checked.
-            Some(unsafe { self.get_static_parameter_unchecked(index) })
+            // SAFETY: the index has been checked.
+            unsafe { Some(self.static_parameter_index_unchecked(index)) }
         } else {
             None
         }
     }
 
     #[inline]
-    pub unsafe fn get_static_parameter_unchecked(&self, index: usize) -> StaticParameter {
+    pub unsafe fn static_parameter_index_unchecked(&self, index: usize) -> StaticParameter {
         StaticParameter {
             index,
             id: self.parameter_ids().get_unchecked(index).clone(),
@@ -458,20 +452,6 @@ impl Model {
             max_value: *self.parameter_max_values().get_unchecked(index),
             default_value: *self.parameter_default_values().get_unchecked(index),
         }
-    }
-
-    #[inline]
-    pub fn static_parameter<T: AsRef<str>>(&self, id: T) -> Option<StaticParameter> {
-        // SAFETY: the index from hashmap is never out of bound.
-        self.get_parameter_id_index(id)
-            .map(|i| unsafe { self.get_static_parameter_unchecked(i) })
-    }
-
-    #[inline]
-    pub fn static_parameter_index(&self, index: usize) -> StaticParameter {
-        assert!(index < self.parameter_count());
-        // SAFETY: index has been checked.
-        unsafe { self.get_static_parameter_unchecked(index) }
     }
 
     #[inline]
@@ -495,11 +475,11 @@ impl Model {
 
     #[inline]
     pub fn part_ids(&self) -> &[String] {
-        self.static_data.part_ids.as_slice()
+        &self.static_data.part_ids
     }
 
     #[inline]
-    pub fn get_part_id_index<T: AsRef<str>>(&self, id: T) -> Option<usize> {
+    pub fn part_index<T: AsRef<str>>(&self, id: T) -> Option<usize> {
         self.static_data.part_ids_map.get(id.as_ref()).copied()
     }
 
@@ -516,23 +496,33 @@ impl Model {
     }
 
     #[inline]
-    pub fn set_part_opacities<T: AsRef<[f32]>>(&mut self, values: T) {
-        self.part_opacities_mut().copy_from_slice(values.as_ref());
+    pub fn part_opacitie<T: AsRef<str>>(&self, id: T) -> Option<f32> {
+        Some(self.part_opacities()[self.part_index(id)?])
+    }
+
+    #[inline]
+    pub fn set_part_opacities<T: AsRef<[f32]>>(&mut self, values: T) -> Result<()> {
+        let values = values.as_ref();
+        if self.part_count() != values.len() {
+            Err(Error::SliceLengthNotEqual(self.part_count(), values.len()))
+        } else {
+            self.part_opacities_mut().copy_from_slice(values);
+            Ok(())
+        }
     }
 
     /// If it fails, it returns `None`, otherwise returns the old value.
     #[inline]
     pub fn set_part_opacity<T: AsRef<str>>(&mut self, id: T, value: f32) -> Option<f32> {
-        let index = self.get_part_id_index(id)?;
         // SAFETY: the index from hashmap is never out of bound.
-        Some(unsafe { self.set_part_opacity_index_unchecked(index, value) })
+        unsafe { Some(self.set_part_opacity_index_unchecked(self.part_index(id)?, value)) }
     }
 
     /// If it fails, it returns `None`, otherwise returns the old value.
     #[inline]
     pub fn set_part_opacity_index(&mut self, index: usize, value: f32) -> Option<f32> {
         if index < self.part_count() {
-            // SAFETY: index has been checked.
+            // SAFETY: the index has been checked.
             Some(unsafe { self.set_part_opacity_index_unchecked(index, value) })
         } else {
             None
@@ -541,26 +531,18 @@ impl Model {
 
     #[inline]
     pub unsafe fn set_part_opacity_index_unchecked(&mut self, index: usize, value: f32) -> f32 {
-        //let value = value.max(0.).min(1.);
-        core::mem::replace(self.part_opacities_mut().get_unchecked_mut(index), value)
-    }
-
-    #[inline]
-    pub fn part_opacity_index(&mut self, index: usize, value: f32) -> f32 {
-        assert!(index < self.part_count());
-        // SAFETY: index has been checked.
-        unsafe { self.set_part_opacity_index_unchecked(index, value) }
+        std::mem::replace(self.part_opacities_mut().get_unchecked_mut(index), value)
     }
 
     #[inline]
     pub fn part_parent_indices(&self) -> &[PartParent] {
-        self.static_data.part_parent_indices.as_slice()
+        &self.static_data.part_parent_indices
     }
 
     #[inline]
     pub fn get_static_part(&self, index: usize) -> Option<StaticPart> {
         if index < self.part_count() {
-            // SAFETY: index has been checked.
+            // SAFETY: the index has been checked.
             Some(unsafe { self.get_static_part_unchecked(index) })
         } else {
             None
@@ -579,14 +561,14 @@ impl Model {
     #[inline]
     pub fn static_part<T: AsRef<str>>(&self, id: T) -> Option<StaticPart> {
         // SAFETY: the index from hashmap is never out of bound.
-        self.get_part_id_index(id)
+        self.part_index(id)
             .map(|i| unsafe { self.get_static_part_unchecked(i) })
     }
 
     #[inline]
     pub fn static_part_index(&self, index: usize) -> StaticPart {
         assert!(index < self.part_count());
-        // SAFETY: index has been checked.
+        // SAFETY: the index has been checked.
         unsafe { self.get_static_part_unchecked(index) }
     }
 
@@ -611,7 +593,7 @@ impl Model {
 
     #[inline]
     pub fn drawable_ids(&self) -> &[String] {
-        self.static_data.drawable_ids.as_slice()
+        &self.static_data.drawable_ids
     }
 
     #[inline]
@@ -621,7 +603,7 @@ impl Model {
 
     #[inline]
     pub fn drawable_constant_flags(&self) -> &[ConstantFlags] {
-        self.static_data.drawable_constant_flags.as_slice()
+        &self.static_data.drawable_constant_flags
     }
 
     pub fn drawable_dynamic_flags(&self) -> Result<Vec<DynamicFlags>> {
@@ -637,7 +619,7 @@ impl Model {
 
     #[inline]
     pub fn drawable_texture_indices(&self) -> &[i32] {
-        self.static_data.drawable_texture_indices.as_slice()
+        &self.static_data.drawable_texture_indices
     }
 
     #[inline]
@@ -669,7 +651,7 @@ impl Model {
 
     #[inline]
     pub fn drawable_masks(&self) -> &[Vec<i32>] {
-        self.static_data.drawable_marks.as_slice()
+        &self.static_data.drawable_marks
     }
 
     pub fn drawable_vertex_positions(&self) -> Result<Vec<Vec<Vector2>>> {
@@ -683,36 +665,25 @@ impl Model {
                 )
                 .ok_or(Error::GetDataError("drawable vertex positions"))?,
             )
-            .map(|(&c, &p)| {
-                if p.is_null() {
-                    Err(Error::GetDataError(
-                        "drawable vertex positions because null pointer",
-                    ))
-                } else {
-                    // SAFETY: it's safe here because the memory of a C/C++ array is contiguous.
-                    Ok(unsafe { from_raw_parts(p, c) }
-                        .iter()
-                        .map(|&v| Vector2::new(v))
-                        .collect())
-                }
-            })
-            .collect()
+            .map(|(&c, &p)| get_slice(p, c).map(|s| s.iter().map(|&v| Vector2::new(v)).collect()))
+            .collect::<Option<_>>()
+            .ok_or(Error::GetDataError("drawable vertex positions"))
     }
 
     #[inline]
     pub fn drawable_vertex_uvs(&self) -> &[Vec<Vector2>] {
-        self.static_data.drawable_vertex_uvs.as_slice()
+        &self.static_data.drawable_vertex_uvs
     }
 
     #[inline]
     pub fn drawable_indices(&self) -> &[Vec<u16>] {
-        self.static_data.drawable_indices.as_slice()
+        &self.static_data.drawable_indices
     }
 
     #[inline]
     pub fn get_static_drawable(&self, index: usize) -> Option<StaticDrawable> {
         if index < self.drawable_count() {
-            // SAFETY: index has been checked.
+            // SAFETY: the index has been checked.
             Some(unsafe { self.get_static_drawable_unchecked(index) })
         } else {
             None
@@ -742,7 +713,7 @@ impl Model {
     #[inline]
     pub fn static_drawable_index(&self, index: usize) -> StaticDrawable {
         assert!(index < self.drawable_count());
-        // SAFETY: index has been checked.
+        // SAFETY: the index has been checked.
         unsafe { self.get_static_drawable_unchecked(index) }
     }
 
@@ -763,7 +734,7 @@ impl Model {
     #[inline]
     pub fn get_dynamic_drawable(&self, index: usize) -> Result<DynamicDrawable> {
         if index < self.drawable_count() {
-            // SAFETY: index has been checked.
+            // SAFETY: the index has been checked.
             unsafe { self.get_dynamic_drawable_unchecked(index) }
         } else {
             Err(Error::InvalidDataCount("drawable dynamic"))
@@ -797,7 +768,7 @@ impl Model {
     #[inline]
     pub fn dynamic_drawable_index(&self, index: usize) -> Result<DynamicDrawable> {
         assert!(index < self.drawable_count());
-        // SAFETY: index has been checked.
+        // SAFETY: the index has been checked.
         unsafe { self.get_dynamic_drawable_unchecked(index) }
     }
 
@@ -850,12 +821,14 @@ impl Clone for Model {
         let mut model =
             init_model(moc.as_moc_ptr()).expect("failed to init model when cloning `Model`"); // it should not fail.
         let static_data = self.static_data.clone();
-        let mut_data = MutableData::new(
-            model.as_mut_ptr() as _,
-            static_data.parameter_ids.len(),
-            static_data.part_ids.len(),
-        )
-        .expect("failed to new mutable data when cloning `Model`"); // it should not fail.
+        let mut_data = unsafe {
+            MutableData::new(
+                model.as_mut_ptr() as _,
+                static_data.parameter_ids.len(),
+                static_data.part_ids.len(),
+            )
+            .expect("failed to new mutable data when cloning `Model`") // it should not fail.
+        };
 
         let mut model = Self {
             model,
@@ -863,14 +836,14 @@ impl Clone for Model {
             static_data,
             mut_data,
         };
-        model.set_parameter_values(self.parameter_values());
-        model.set_part_opacities(self.part_opacities());
+        model.set_parameter_values(self.parameter_values()).unwrap(); // it should not fail.
+        model.set_part_opacities(self.part_opacities()).unwrap(); // it should not fail.
 
         model
     }
 }
 
-impl core::convert::TryFrom<Moc> for Model {
+impl std::convert::TryFrom<Moc> for Model {
     type Error = Error;
 
     #[inline]
@@ -901,8 +874,8 @@ impl<'a> Iterator for StaticParameterIter<'a> {
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.index < self.len {
-            // SAFETY: index has been checked.
-            let parameter = unsafe { self.model.get_static_parameter_unchecked(self.index) };
+            // SAFETY: the index has been checked.
+            let parameter = unsafe { self.model.static_parameter_index_unchecked(self.index) };
             self.index += 1;
             Some(parameter)
         } else {
@@ -922,7 +895,7 @@ impl<'a> DoubleEndedIterator for StaticParameterIter<'a> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.index < self.len {
             // SAFETY: it's never out of bound.
-            let parameter = unsafe { self.model.get_static_parameter_unchecked(self.len - 1) };
+            let parameter = unsafe { self.model.static_parameter_index_unchecked(self.len - 1) };
             self.len -= 1;
             Some(parameter)
         } else {
@@ -932,7 +905,7 @@ impl<'a> DoubleEndedIterator for StaticParameterIter<'a> {
 }
 
 impl<'a> ExactSizeIterator for StaticParameterIter<'a> {}
-impl<'a> core::iter::FusedIterator for StaticParameterIter<'a> {}
+impl<'a> std::iter::FusedIterator for StaticParameterIter<'a> {}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct StaticPart {
@@ -954,7 +927,7 @@ impl<'a> Iterator for StaticPartIter<'a> {
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.index < self.len {
-            // SAFETY: index has been checked.
+            // SAFETY: the index has been checked.
             let part = unsafe { self.model.get_static_part_unchecked(self.index) };
             self.index += 1;
             Some(part)
@@ -985,7 +958,7 @@ impl<'a> DoubleEndedIterator for StaticPartIter<'a> {
 }
 
 impl<'a> ExactSizeIterator for StaticPartIter<'a> {}
-impl<'a> core::iter::FusedIterator for StaticPartIter<'a> {}
+impl<'a> std::iter::FusedIterator for StaticPartIter<'a> {}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct StaticDrawable {
@@ -1011,7 +984,7 @@ impl<'a> Iterator for StaticDrawableIter<'a> {
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.index < self.len {
-            // SAFETY: index has been checked.
+            // SAFETY: the index has been checked.
             let drawable_static = unsafe { self.model.get_static_drawable_unchecked(self.index) };
             self.index += 1;
             Some(drawable_static)
@@ -1042,7 +1015,7 @@ impl<'a> DoubleEndedIterator for StaticDrawableIter<'a> {
 }
 
 impl<'a> ExactSizeIterator for StaticDrawableIter<'a> {}
-impl<'a> core::iter::FusedIterator for StaticDrawableIter<'a> {}
+impl<'a> std::iter::FusedIterator for StaticDrawableIter<'a> {}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DynamicDrawable {
@@ -1068,7 +1041,7 @@ impl<'a> Iterator for DynamicDrawableIter<'a> {
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.index < self.len {
-            // SAFETY: index has been checked.
+            // SAFETY: the index has been checked.
             let drawable_dynamic = unsafe { self.model.get_dynamic_drawable_unchecked(self.index) };
             self.index += 1;
             Some(drawable_dynamic)
@@ -1100,7 +1073,7 @@ impl<'a> DoubleEndedIterator for DynamicDrawableIter<'a> {
 }
 
 impl<'a> ExactSizeIterator for DynamicDrawableIter<'a> {}
-impl<'a> core::iter::FusedIterator for DynamicDrawableIter<'a> {}
+impl<'a> std::iter::FusedIterator for DynamicDrawableIter<'a> {}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Vector2 {
@@ -1159,34 +1132,34 @@ impl PartParent {
     #[inline]
     pub fn new(index: i32) -> Result<Self> {
         match index {
-            i if i < -1 => Err(Error::InvalidDataCount("part parent")),
+            i if i < -1 => Err(Error::GetDataError("part parent")),
             -1 => Ok(Self::Root),
             _ => Ok(Self::Parent(index as usize)),
         }
     }
 
-    /// Returns `true` if the part_parent is [`Root`](PartParent::Root).
+    /// Returns `true` if the [`PartParent`] is [`Root`](PartParent::Root).
     #[inline]
-    pub fn is_root(&self) -> bool {
-        matches!(self, Self::Root)
+    pub fn is_root(self) -> bool {
+        self == Self::Root
     }
 
-    /// Returns `true` if the part_parent is [`Parent`](PartParent::Parent).
+    /// Returns `true` if the [`PartParent`] is [`Parent`](PartParent::Parent).
     #[inline]
-    pub fn is_parent(&self) -> bool {
-        matches!(self, Self::Parent(..))
+    pub fn is_parent(self) -> bool {
+        matches!(self, Self::Parent(_))
     }
 
     #[inline]
-    pub fn parent_index(&self) -> Option<usize> {
+    pub fn parent_index(self) -> Option<usize> {
         match self {
             PartParent::Root => None,
-            PartParent::Parent(i) => Some(*i),
+            PartParent::Parent(i) => Some(i),
         }
     }
 }
 
-impl core::convert::TryFrom<i32> for PartParent {
+impl std::convert::TryFrom<i32> for PartParent {
     type Error = Error;
 
     #[inline]
@@ -1205,10 +1178,14 @@ pub struct Canvas {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::read_haru_moc;
+    use crate::{
+        log::{set_logger, DefaultLogger},
+        read_haru_moc,
+    };
 
     #[test]
     fn test_model() -> Result<()> {
+        set_logger(DefaultLogger);
         let moc = read_haru_moc()?;
         let _model = Model::new(moc)?;
         //println!("{:?}", model.parameters());

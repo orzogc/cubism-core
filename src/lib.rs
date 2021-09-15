@@ -1,9 +1,18 @@
-pub mod error;
-pub mod flags;
+//#![warn(missing_docs)]
+
 pub mod log;
-pub mod moc;
 pub mod model;
-pub mod version;
+
+mod error;
+mod flags;
+mod moc;
+mod version;
+
+pub use error::*;
+pub use flags::*;
+pub use moc::*;
+pub use model::Model;
+pub use version::*;
 
 /// Necessary alignment for mocs (in bytes).
 pub(crate) const ALIGN_OF_MOC: usize = cubism_core_sys::csmAlignofMoc as _;
@@ -11,7 +20,7 @@ pub(crate) const ALIGN_OF_MOC: usize = cubism_core_sys::csmAlignofMoc as _;
 pub(crate) const ALIGN_OF_MODEL: usize = cubism_core_sys::csmAlignofModel as _;
 
 #[cfg(test)]
-pub fn read_haru_moc() -> error::Result<moc::Moc> {
+pub(crate) fn read_haru_moc() -> Result<moc::Moc> {
     use std::env;
     use std::path::PathBuf;
 
