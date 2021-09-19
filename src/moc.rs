@@ -10,7 +10,7 @@ pub struct Moc {
 
 #[inline]
 fn get_moc_version(data: &AlignedBytes) -> cubism_core_sys::csmMocVersion {
-    unsafe { cubism_core_sys::csmGetMocVersion(data.as_ptr() as _, data.len() as _) }
+    unsafe { cubism_core_sys::csmGetMocVersion(data.as_ptr().cast(), data.len() as _) }
 }
 
 impl Moc {
@@ -23,18 +23,21 @@ impl Moc {
         debug_assert_eq!(data.len(), moc3_data.as_ref().len());
         let version = get_moc_version(&data);
 
-        if MocVersion::from(version) > MocVersion::latest_version() {
-            Err(Error::InvalidMocVersion(version))
-        } else if unsafe {
-            cubism_core_sys::csmReviveMocInPlace(data.as_mut_ptr() as _, data.len() as _)
-        }
-        .is_null()
-        {
-            Err(Error::InvalidMocData)
-        } else {
-            Ok(Self {
-                moc: Arc::new(data),
-            })
+        unsafe {
+            if MocVersion::from(version) > MocVersion::latest_version() {
+                Err(Error::InvalidMocVersion(version))
+            } else if cubism_core_sys::csmReviveMocInPlace(
+                data.as_mut_ptr().cast(),
+                data.len() as _,
+            )
+            .is_null()
+            {
+                Err(Error::InvalidMocData)
+            } else {
+                Ok(Self {
+                    moc: Arc::new(data),
+                })
+            }
         }
     }
 
@@ -54,10 +57,17 @@ impl Moc {
         get_moc_version(&self.moc).into()
     }
 
-    /// Convert [`Moc`] to a [`cubism_core_sys::csmMoc`] pointer.
+    /// Gets the size of moc.
+    #[inline]
+    pub fn moc_size(&self) -> usize {
+        self.moc.len()
+    }
+
+    /// Converts [`Moc`] to a [`cubism_core_sys::csmMoc`] pointer.
+    /// The caller should make sure the pointer won't live longer than [`Moc`].
     #[inline]
     pub fn as_moc_ptr(&self) -> *const cubism_core_sys::csmMoc {
-        self.moc.as_ptr() as _
+        self.moc.as_ptr().cast()
     }
 }
 

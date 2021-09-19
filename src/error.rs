@@ -12,8 +12,8 @@ pub enum Error {
     InvalidMocData,
     /// Failed to initialize model.
     InitializeModelError,
-    /// Invalid data count.
-    InvalidDataCount(&'static str),
+    /// Invalid count.
+    InvalidCount(&'static str),
     /// Failed to get data.
     GetDataError(&'static str),
     /// Invalid flags.
@@ -28,13 +28,13 @@ impl std::fmt::Display for Error {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::InvalidMocVersion(v) => write!(f, "unsupported moc version: {}", *v),
+            Error::InvalidMocVersion(v) => write!(f, "unsupported moc version: {}", v),
             Error::MocDataTooLarge => write!(f, "the size of moc3 data is too large"),
             Error::InvalidMocData => write!(f, "invalid moc3 data"),
             Error::InitializeModelError => write!(f, "failed to initialize model"),
-            Error::InvalidDataCount(s) => write!(f, "invalid {} count", *s),
-            Error::GetDataError(s) => write!(f, "failed to get {}", *s),
-            Error::InvalidFlags(s, u) => write!(f, "invalid {} flags: {}", *s, *u),
+            Error::InvalidCount(s) => write!(f, "invalid count of {}", s),
+            Error::GetDataError(s) => write!(f, "failed to get {}", s),
+            Error::InvalidFlags(s, u) => write!(f, "invalid {} flags: {}", s, u),
             Error::SliceLengthNotEqual(len1, len2) => {
                 write!(f, "two slices have different lengths: {}, {}", len1, len2)
             }
@@ -51,7 +51,7 @@ impl std::error::Error for Error {
             Error::MocDataTooLarge => None,
             Error::InvalidMocData => None,
             Error::InitializeModelError => None,
-            Error::InvalidDataCount(_) => None,
+            Error::InvalidCount(_) => None,
             Error::GetDataError(_) => None,
             Error::InvalidFlags(_, _) => None,
             Error::SliceLengthNotEqual(_, _) => None,

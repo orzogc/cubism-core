@@ -1,33 +1,49 @@
 use crate::{
+    drawable::{DynamicDrawables, StaticDrawables},
+    parameter::StaticParameters,
+    part::StaticParts,
     Error, Moc, Result, ALIGN_OF_MODEL, {ConstantFlags, DynamicFlags},
 };
 use aligned_utils::bytes::AlignedBytes;
-use std::{
-    collections::HashMap,
-    ffi::CStr,
-    mem,
-    os::raw::{c_char, c_int},
-    ptr::NonNull,
-    slice,
-};
+use std::{collections::HashMap, ffi::CStr, mem, slice};
+
+const ISIZE_MAX: usize = isize::MAX as _;
+const I32_MAX: u32 = i32::MAX as _;
+const F32_DIFF: f32 = 0.0001;
+const OPACITY_MIN: f32 = 0.0 - F32_DIFF;
+const OPACITY_MAX: f32 = 1.0 + F32_DIFF;
 
 #[inline]
-fn get_slice<'a, T>(ptr: *const T, len: usize) -> Option<&'a [T]> {
-    if ptr.is_null() || len * mem::size_of::<T>() > isize::MAX as usize {
+unsafe fn get_slice<'a, T>(ptr: *const T, len: usize) -> Option<&'a [T]> {
+    if ptr.is_null() || len * mem::size_of::<T>() > ISIZE_MAX {
         None
     } else {
         // SAFETY: it's safe here because the memory of a C/C++ array is contiguous.
-        unsafe { Some(slice::from_raw_parts(ptr, len)) }
+        Some(slice::from_raw_parts(ptr, len))
     }
 }
 
 #[inline]
-fn get_mut_slice<'a, T>(ptr: *mut T, len: usize) -> Option<&'a mut [T]> {
-    if ptr.is_null() || len * mem::size_of::<T>() > isize::MAX as usize {
+unsafe fn get_slice_check<'a, T, F>(ptr: *const T, len: usize, check: F) -> Option<&'a [T]>
+where
+    F: Fn((usize, &T)) -> bool,
+{
+    get_slice(ptr, len).and_then(|s| {
+        if s.iter().enumerate().all(check) {
+            Some(s)
+        } else {
+            None
+        }
+    })
+}
+
+#[inline]
+unsafe fn get_mut_slice<'a, T>(ptr: *mut T, len: usize) -> Option<&'a mut [T]> {
+    if ptr.is_null() || len * mem::size_of::<T>() > ISIZE_MAX {
         None
     } else {
         // SAFETY: it's safe here because the memory of a C/C++ array is contiguous.
-        unsafe { Some(slice::from_raw_parts_mut(ptr, len)) }
+        Some(slice::from_raw_parts_mut(ptr, len))
     }
 }
 
@@ -40,7 +56,8 @@ fn init_model(moc: *const cubism_core_sys::csmMoc) -> Result<AlignedBytes> {
     debug_assert_eq!(model.len(), size as _);
 
     unsafe {
-        if cubism_core_sys::csmInitializeModelInPlace(moc, model.as_mut_ptr() as _, size).is_null()
+        if cubism_core_sys::csmInitializeModelInPlace(moc, model.as_mut_ptr().cast(), size)
+            .is_null()
         {
             Err(Error::InitializeModelError)
         } else {
@@ -50,25 +67,23 @@ fn init_model(moc: *const cubism_core_sys::csmMoc) -> Result<AlignedBytes> {
 }
 
 #[inline]
-fn check_count(i: c_int) -> Option<usize> {
-    if i < 0 {
-        None
+fn convert_i32(i: i32) -> Option<usize> {
+    if i >= 0 {
+        Some(i as _)
     } else {
-        Some(i as usize)
+        None
     }
 }
 
 #[inline]
-fn get_ids(ptr: *const *const c_char, len: usize) -> Option<Vec<String>> {
+unsafe fn get_ids<'a>(ptr: *const *const i8, len: usize) -> Option<Box<[&'a str]>> {
     get_slice(ptr, len).and_then(|s| {
         s.iter()
-            .map(|&ptr| {
-                if ptr.is_null() {
+            .map(|p| {
+                if p.is_null() {
                     None
                 } else {
-                    // SAFETY: it's safe here because the pointer points to a C string
-                    // according to the Cubism Core doc.
-                    unsafe { Some(CStr::from_ptr(ptr).to_string_lossy().into_owned()) }
+                    unsafe { CStr::from_ptr(*p).to_str().ok() }
                 }
             })
             .collect()
@@ -76,257 +91,294 @@ fn get_ids(ptr: *const *const c_char, len: usize) -> Option<Vec<String>> {
 }
 
 #[inline]
-fn get_ids_map(ids: &[String]) -> HashMap<String, usize> {
-    ids.iter()
-        .enumerate()
-        .map(|(i, s)| (s.clone(), i))
-        .collect()
+fn get_ids_map<'a>(ids: &[&'a str]) -> HashMap<&'a str, usize> {
+    ids.iter().enumerate().map(|(i, s)| (*s, i)).collect()
 }
 
-#[derive(Clone, Debug)]
-struct StaticData {
-    parameter_ids: Vec<String>,
-    parameter_ids_map: HashMap<String, usize>,
-    parameter_min_values: Vec<f32>,
-    parameter_max_values: Vec<f32>,
-    parameter_default_values: Vec<f32>,
-    part_ids: Vec<String>,
-    part_ids_map: HashMap<String, usize>,
-    part_parent_indices: Vec<PartParent>,
-    drawable_ids: Vec<String>,
-    drawable_ids_map: HashMap<String, usize>,
-    drawable_constant_flags: Vec<ConstantFlags>,
-    drawable_texture_indices: Vec<i32>,
-    drawable_marks: Vec<Vec<i32>>,
-    drawable_vertex_counts: Vec<usize>,
-    drawable_vertex_uvs: Vec<Vec<Vector2>>,
-    drawable_indices: Vec<Vec<u16>>,
+#[inline]
+fn check_opacity(opacity: &f32) -> bool {
+    (OPACITY_MIN..=OPACITY_MAX).contains(opacity)
 }
 
-impl StaticData {
-    unsafe fn new(model: *const cubism_core_sys::csmModel) -> Result<Self> {
-        let parameter_count = check_count(cubism_core_sys::csmGetParameterCount(model))
-            .ok_or(Error::InvalidDataCount("parameter"))?;
-        let part_count = check_count(cubism_core_sys::csmGetPartCount(model))
-            .ok_or(Error::InvalidDataCount("part"))?;
-        let drawable_count = check_count(cubism_core_sys::csmGetDrawableCount(model))
-            .ok_or(Error::InvalidDataCount("drawable"))?;
+#[derive(Debug)]
+struct Parameters<'a> {
+    ids: Box<[&'a str]>,
+    ids_map: HashMap<&'a str, usize>,
+    min_values: &'a [f32],
+    max_values: &'a [f32],
+    default_values: &'a [f32],
+    values: &'a mut [f32],
+    key_values: Box<[&'a [f32]]>,
+}
 
-        let parameter_ids = get_ids(cubism_core_sys::csmGetParameterIds(model), parameter_count)
+impl<'a> Parameters<'a> {
+    unsafe fn new(model: *mut cubism_core_sys::csmModel) -> Result<Self> {
+        let count = convert_i32(cubism_core_sys::csmGetParameterCount(model))
+            .ok_or(Error::InvalidCount("parameter"))?;
+        let ids = get_ids(cubism_core_sys::csmGetParameterIds(model), count)
             .ok_or(Error::GetDataError("parameter ids"))?;
-        let parameter_ids_map = get_ids_map(&parameter_ids);
+        let ids_map = get_ids_map(&ids);
 
-        let parameter_min_values = get_slice(
-            cubism_core_sys::csmGetParameterMinimumValues(model),
-            parameter_count,
-        )
-        .ok_or(Error::GetDataError("parameter min values"))?
-        .to_vec();
+        let min_values = get_slice(cubism_core_sys::csmGetParameterMinimumValues(model), count)
+            .ok_or(Error::GetDataError("parameter min values"))?;
 
-        let parameter_max_values = get_slice(
+        let max_values = get_slice_check(
             cubism_core_sys::csmGetParameterMaximumValues(model),
-            parameter_count,
+            count,
+            |(i, v)| *v >= min_values[i] - F32_DIFF,
         )
-        .ok_or(Error::GetDataError("parameter max values"))?
-        .to_vec();
+        .ok_or(Error::GetDataError("parameter max values"))?;
 
-        let parameter_default_values = get_slice(
+        let default_values = get_slice_check(
             cubism_core_sys::csmGetParameterDefaultValues(model),
-            parameter_count,
+            count,
+            |(i, v)| (min_values[i] - F32_DIFF..=max_values[i] + F32_DIFF).contains(v),
         )
-        .ok_or(Error::GetDataError("parameter default values"))?
-        .to_vec();
+        .ok_or(Error::GetDataError("parameter default values"))?;
 
-        let part_ids = get_ids(cubism_core_sys::csmGetPartIds(model), part_count)
-            .ok_or(Error::GetDataError("part ids"))?;
-        let part_ids_map = get_ids_map(&part_ids);
+        let values = get_mut_slice(cubism_core_sys::csmGetParameterValues(model), count)
+            .ok_or(Error::GetDataError("parameter values"))?;
 
-        let part_parent_indices = get_slice(
-            cubism_core_sys::csmGetPartParentPartIndices(model),
-            part_count,
-        )
-        .ok_or(Error::GetDataError("part parent indices"))?
-        .iter()
-        .map(|&i| PartParent::new(i))
-        .collect::<Result<_>>()?;
+        let key_values = get_slice(cubism_core_sys::csmGetParameterKeyCounts(model), count)
+            .ok_or(Error::GetDataError("parameter key counts"))?
+            .iter()
+            .zip(
+                get_slice(cubism_core_sys::csmGetParameterKeyValues(model), count)
+                    .ok_or(Error::GetDataError("parameter key values"))?,
+            )
+            .enumerate()
+            .map(|(i, (c, p))| {
+                get_slice_check(*p, convert_i32(*c)?, |(_, v)| {
+                    (min_values[i] - F32_DIFF..=max_values[i] + F32_DIFF).contains(v)
+                })
+            })
+            .collect::<Option<Box<_>>>()
+            .ok_or(Error::GetDataError("parameter key values"))?;
 
-        let drawable_ids = get_ids(cubism_core_sys::csmGetDrawableIds(model), drawable_count)
-            .ok_or(Error::GetDataError("drawable ids"))?;
-        let drawable_ids_map = get_ids_map(&drawable_ids);
-
-        let drawable_constant_flags = get_slice(
-            cubism_core_sys::csmGetDrawableConstantFlags(model),
-            drawable_count,
-        )
-        .ok_or(Error::GetDataError("drawable constant flags"))?
-        .iter()
-        .map(|&f| ConstantFlags::from_bits(f).ok_or(Error::InvalidFlags("constant", f)))
-        .collect::<Result<_>>()?;
-
-        let drawable_texture_indices = get_slice(
-            cubism_core_sys::csmGetDrawableTextureIndices(model),
-            drawable_count,
-        )
-        .ok_or(Error::GetDataError("drawable texture indices"))?
-        .to_vec();
-
-        let drawable_marks = get_slice(
-            cubism_core_sys::csmGetDrawableMaskCounts(model),
-            drawable_count,
-        )
-        .ok_or(Error::GetDataError("drawable mask counts"))?
-        .iter()
-        .zip(
-            get_slice(cubism_core_sys::csmGetDrawableMasks(model), drawable_count)
-                .ok_or(Error::GetDataError("drawable masks"))?,
-        )
-        .map(|(&c, &p)| {
-            if c < 0 {
-                Err(Error::InvalidDataCount("drawable mask"))
-            } else {
-                get_slice(p, c as _)
-                    .map(|s| s.to_vec())
-                    .ok_or(Error::GetDataError("drawable masks"))
-            }
+        Ok(Self {
+            ids,
+            ids_map,
+            min_values,
+            max_values,
+            default_values,
+            values,
+            key_values,
         })
-        .collect::<Result<_>>()?;
+    }
+}
 
-        let drawable_vertex_counts = get_slice(
-            cubism_core_sys::csmGetDrawableVertexCounts(model),
-            drawable_count,
+#[derive(Debug)]
+struct Parts<'a> {
+    ids: Box<[&'a str]>,
+    ids_map: HashMap<&'a str, usize>,
+    opacities: &'a mut [f32],
+    parent_indices: &'a [PartParent],
+}
+
+impl<'a> Parts<'a> {
+    unsafe fn new(model: *mut cubism_core_sys::csmModel) -> Result<Self> {
+        let count = convert_i32(cubism_core_sys::csmGetPartCount(model))
+            .ok_or(Error::InvalidCount("part"))?;
+
+        let ids = get_ids(cubism_core_sys::csmGetPartIds(model), count)
+            .ok_or(Error::GetDataError("part ids"))?;
+        let ids_map = get_ids_map(&ids);
+
+        let opacities = get_mut_slice(cubism_core_sys::csmGetPartOpacities(model), count)
+            .ok_or(Error::GetDataError("part opacities"))?;
+
+        let parent_indices = get_slice_check(
+            cubism_core_sys::csmGetPartParentPartIndices(model).cast::<PartParent>(),
+            count,
+            |(_, i)| i.is_valid(),
         )
-        .ok_or(Error::GetDataError("drawable vertex counts"))?
-        .iter()
-        .map(|&c| check_count(c))
-        .collect::<Option<Vec<_>>>()
-        .ok_or(Error::InvalidDataCount("drawable vertex"))?;
+        .ok_or(Error::GetDataError("part parent indices"))?;
 
-        let drawable_vertex_uvs = drawable_vertex_counts
+        Ok(Self {
+            ids,
+            ids_map,
+            opacities,
+            parent_indices,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct Drawables<'a> {
+    ids: Box<[&'a str]>,
+    ids_map: HashMap<&'a str, usize>,
+    constant_flags: &'a [ConstantFlags],
+    dynamic_flags: &'a [DynamicFlags],
+    texture_indices: &'a [u32],
+    draw_orders: &'a [i32],
+    render_orders: &'a [i32],
+    opacities: &'a [f32],
+    marks: Box<[&'a [u32]]>,
+    vertex_positions: Box<[&'a [Vector2]]>,
+    vertex_uvs: Box<[&'a [Vector2]]>,
+    indices: Box<[&'a [u16]]>,
+}
+
+impl<'a> Drawables<'a> {
+    unsafe fn new(model: *const cubism_core_sys::csmModel) -> Result<Self> {
+        let count = convert_i32(cubism_core_sys::csmGetDrawableCount(model))
+            .ok_or(Error::InvalidCount("drawable"))?;
+
+        let ids = get_ids(cubism_core_sys::csmGetDrawableIds(model), count)
+            .ok_or(Error::GetDataError("drawable ids"))?;
+        let ids_map = get_ids_map(&ids);
+
+        let constant_flags = get_slice_check(
+            cubism_core_sys::csmGetDrawableConstantFlags(model).cast::<ConstantFlags>(),
+            count,
+            |(_, f)| f.is_valid(),
+        )
+        .ok_or(Error::GetDataError("drawable constant flags"))?;
+
+        let dynamic_flags = get_slice_check(
+            cubism_core_sys::csmGetDrawableDynamicFlags(model).cast::<DynamicFlags>(),
+            count,
+            |(_, f)| f.is_valid(),
+        )
+        .ok_or(Error::GetDataError("drawable dynamic flags"))?;
+
+        let texture_indices = get_slice_check(
+            cubism_core_sys::csmGetDrawableTextureIndices(model).cast::<u32>(),
+            count,
+            |(_, i)| *i <= I32_MAX,
+        )
+        .ok_or(Error::GetDataError("drawable texture indices"))?;
+
+        let draw_orders = get_slice(cubism_core_sys::csmGetDrawableDrawOrders(model), count)
+            .ok_or(Error::GetDataError("drawable draw orders"))?;
+
+        let render_orders = get_slice(cubism_core_sys::csmGetDrawableRenderOrders(model), count)
+            .ok_or(Error::GetDataError("drawable render orders"))?;
+
+        let opacities = get_slice_check(
+            cubism_core_sys::csmGetDrawableOpacities(model),
+            count,
+            |(_, o)| check_opacity(o),
+        )
+        .ok_or(Error::GetDataError("drawable opacities"))?;
+
+        let marks = get_slice(cubism_core_sys::csmGetDrawableMaskCounts(model), count)
+            .ok_or(Error::GetDataError("drawable mask counts"))?
             .iter()
             .zip(
                 get_slice(
-                    cubism_core_sys::csmGetDrawableVertexUvs(model),
-                    drawable_count,
+                    cubism_core_sys::csmGetDrawableMasks(model).cast::<*const u32>(),
+                    count,
+                )
+                .ok_or(Error::GetDataError("drawable masks"))?,
+            )
+            .map(|(c, p)| get_slice_check(*p, convert_i32(*c)?, |(_, m)| *m <= I32_MAX))
+            .collect::<Option<Box<_>>>()
+            .ok_or(Error::GetDataError("drawable masks"))?;
+
+        let vertex_counts = get_slice(cubism_core_sys::csmGetDrawableVertexCounts(model), count)
+            .ok_or(Error::GetDataError("drawable vertex counts"))?;
+
+        let vertex_positions = vertex_counts
+            .iter()
+            .zip(
+                get_slice(
+                    cubism_core_sys::csmGetDrawableVertexPositions(model).cast::<*const Vector2>(),
+                    count,
+                )
+                .ok_or(Error::GetDataError("drawable vertex positions"))?,
+            )
+            .map(|(c, p)| get_slice(*p, convert_i32(*c)?))
+            .collect::<Option<Box<_>>>()
+            .ok_or(Error::GetDataError("drawable vertex positions"))?;
+
+        let vertex_uvs = vertex_counts
+            .iter()
+            .zip(
+                get_slice(
+                    cubism_core_sys::csmGetDrawableVertexUvs(model).cast::<*const Vector2>(),
+                    count,
                 )
                 .ok_or(Error::GetDataError("drawable vertex uvs"))?,
             )
-            .map(|(&c, &p)| get_slice(p, c).map(|s| s.iter().map(|&v| Vector2::new(v)).collect()))
-            .collect::<Option<_>>()
+            .map(|(c, p)| get_slice(*p, convert_i32(*c)?))
+            .collect::<Option<Box<_>>>()
             .ok_or(Error::GetDataError("drawable vertex uvs"))?;
 
-        let drawable_indices = get_slice(
-            cubism_core_sys::csmGetDrawableIndexCounts(model),
-            drawable_count,
-        )
-        .ok_or(Error::GetDataError("drawable index counts"))?
-        .iter()
-        .zip(
-            get_slice(
-                cubism_core_sys::csmGetDrawableIndices(model),
-                drawable_count,
+        let indices = get_slice(cubism_core_sys::csmGetDrawableIndexCounts(model), count)
+            .ok_or(Error::GetDataError("drawable index counts"))?
+            .iter()
+            .zip(
+                get_slice(cubism_core_sys::csmGetDrawableIndices(model), count)
+                    .ok_or(Error::GetDataError("drawable indices"))?,
             )
-            .ok_or(Error::GetDataError("drawable indices"))?,
-        )
-        .map(|(&c, &p)| {
-            // the Cubism Core doc indicate it should be 0 or a multiple of 3.
-            if c < 0 || c % 3 != 0 {
-                Err(Error::InvalidDataCount("drawable indices"))
-            } else {
-                get_slice(p, c as _)
-                    .map(|s| s.to_vec())
-                    .ok_or(Error::GetDataError("drawable indices"))
-            }
-        })
-        .collect::<Result<_>>()?;
+            .map(|(c, p)| {
+                // the Cubism Core doc indicate it should be 0 or a multiple of 3.
+                if *c < 0 || *c % 3 != 0 {
+                    Err(Error::InvalidCount("drawable indices"))
+                } else {
+                    get_slice(*p, *c as _).ok_or(Error::GetDataError("drawable indices"))
+                }
+            })
+            .collect::<Result<Box<_>>>()?;
 
         Ok(Self {
-            parameter_ids,
-            parameter_ids_map,
-            parameter_min_values,
-            parameter_max_values,
-            parameter_default_values,
-            part_ids,
-            part_ids_map,
-            part_parent_indices,
-            drawable_ids,
-            drawable_ids_map,
-            drawable_constant_flags,
-            drawable_texture_indices,
-            drawable_marks,
-            drawable_vertex_counts,
-            drawable_vertex_uvs,
-            drawable_indices,
+            ids,
+            ids_map,
+            constant_flags,
+            dynamic_flags,
+            texture_indices,
+            draw_orders,
+            render_orders,
+            opacities,
+            marks,
+            vertex_positions,
+            vertex_uvs,
+            indices,
         })
     }
 }
 
 #[derive(Debug)]
-struct MutableData {
-    parameter_values: NonNull<[f32]>,
-    part_opacities: NonNull<[f32]>,
-}
-
-impl MutableData {
-    unsafe fn new(
-        model: *mut cubism_core_sys::csmModel,
-        parameter_count: usize,
-        part_count: usize,
-    ) -> Result<Self> {
-        let parameter_values = NonNull::from(
-            get_mut_slice(
-                cubism_core_sys::csmGetParameterValues(model),
-                parameter_count,
-            )
-            .ok_or(Error::GetDataError("parameter values"))?,
-        );
-        let part_opacities = NonNull::from(
-            get_mut_slice(cubism_core_sys::csmGetPartOpacities(model), part_count)
-                .ok_or(Error::GetDataError("part opacities"))?,
-        );
-
-        Ok(Self {
-            parameter_values,
-            part_opacities,
-        })
-    }
-}
-
-// SAFETY: TODO
-unsafe impl Send for MutableData {}
-unsafe impl Sync for MutableData {}
-
-/// Cubism model.
-#[derive(Debug)]
-pub struct Model {
-    model: AlignedBytes,
+pub struct Model<'a> {
     moc: Moc,
-    static_data: StaticData,
-    mut_data: MutableData,
+    model: AlignedBytes,
+    parameters: Parameters<'a>,
+    parts: Parts<'a>,
+    drawables: Drawables<'a>,
 }
 
-impl Model {
+impl<'a> Model<'a> {
     pub fn new(moc: Moc) -> Result<Self> {
         unsafe {
             let mut model = init_model(moc.as_moc_ptr())?;
-            let static_data = StaticData::new(model.as_ptr() as _)?;
-            let mut_data = MutableData::new(
-                model.as_mut_ptr() as _,
-                static_data.parameter_ids.len(),
-                static_data.part_ids.len(),
-            )?;
+            let parameters = Parameters::new(model.as_mut_ptr().cast())?;
+            let parts = Parts::new(model.as_mut_ptr().cast())?;
+            let drawables = Drawables::new(model.as_ptr().cast())?;
 
             Ok(Self {
-                model,
                 moc,
-                static_data,
-                mut_data,
+                model,
+                parameters,
+                parts,
+                drawables,
             })
         }
     }
 
     #[inline]
-    pub fn new_from_model(model: Self) -> Result<Self> {
+    pub fn new_from_model(model: &Self) -> Result<Self> {
         Self::new(model.moc())
+    }
+
+    #[inline]
+    pub fn clone_from_model(model: &Self) -> Result<Self> {
+        let mut new_model = Self::new_from_model(model)?;
+        new_model.set_parameter_values(model.parameter_values());
+        new_model.set_part_opacities(model.part_opacities());
+        new_model.update();
+
+        Ok(new_model)
     }
 
     #[inline]
@@ -336,453 +388,19 @@ impl Model {
 
     #[inline]
     pub fn as_model_ptr(&self) -> *const cubism_core_sys::csmModel {
-        self.model.as_ptr() as _
+        self.model.as_ptr().cast()
     }
 
     #[inline]
     pub fn as_model_mut_ptr(&mut self) -> *mut cubism_core_sys::csmModel {
-        self.model.as_mut_ptr() as _
+        self.model.as_mut_ptr().cast()
     }
 
     #[inline]
-    pub fn parameter_count(&self) -> usize {
-        self.static_data.parameter_ids.len()
-    }
-
-    #[inline]
-    pub fn parameter_ids(&self) -> &[String] {
-        &self.static_data.parameter_ids
-    }
-
-    #[inline]
-    pub fn parameter_index<T: AsRef<str>>(&self, id: T) -> Option<usize> {
-        self.static_data.parameter_ids_map.get(id.as_ref()).copied()
-    }
-
-    #[inline]
-    pub fn parameter_min_values(&self) -> &[f32] {
-        &self.static_data.parameter_min_values
-    }
-
-    #[inline]
-    pub fn parameter_max_values(&self) -> &[f32] {
-        &self.static_data.parameter_max_values
-    }
-
-    #[inline]
-    pub fn parameter_default_values(&self) -> &[f32] {
-        &self.static_data.parameter_default_values
-    }
-
-    #[inline]
-    pub fn parameter_values(&self) -> &[f32] {
-        // SAFETY: it's safe as long as `self` is immutable.
-        unsafe { self.mut_data.parameter_values.as_ref() }
-    }
-
-    #[inline]
-    pub fn parameter_values_mut(&mut self) -> &mut [f32] {
-        // SAFETY: it's safe as long as `self` is mutable.
-        unsafe { self.mut_data.parameter_values.as_mut() }
-    }
-
-    #[inline]
-    pub fn parameter_value<T: AsRef<str>>(&self, id: T) -> Option<f32> {
-        Some(self.parameter_values()[self.parameter_index(id)?])
-    }
-
-    #[inline]
-    pub fn set_parameter_values<T: AsRef<[f32]>>(&mut self, values: T) -> Result<()> {
-        let values = values.as_ref();
-        if self.parameter_count() != values.len() {
-            Err(Error::SliceLengthNotEqual(
-                self.parameter_count(),
-                values.len(),
-            ))
-        } else {
-            self.parameter_values_mut().copy_from_slice(values);
-            Ok(())
-        }
-    }
-
-    /// If it fails, it returns `None`, otherwise returns the old value.
-    #[inline]
-    pub fn set_parameter_value<T: AsRef<str>>(&mut self, id: T, value: f32) -> Option<f32> {
-        // SAFETY: the index from hashmap is never out of bound.
-        unsafe { Some(self.set_parameter_value_index_unchecked(self.parameter_index(id)?, value)) }
-    }
-
-    #[inline]
-    pub fn set_parameter_value_index(&mut self, index: usize, value: f32) -> Option<f32> {
-        if index < self.parameter_count() {
-            // SAFETY: the index has been checked.
-            unsafe { Some(self.set_parameter_value_index_unchecked(index, value)) }
-        } else {
-            None
-        }
-    }
-
-    #[inline]
-    pub unsafe fn set_parameter_value_index_unchecked(&mut self, index: usize, value: f32) -> f32 {
-        std::mem::replace(self.parameter_values_mut().get_unchecked_mut(index), value)
-    }
-
-    #[inline]
-    pub fn static_parameter<T: AsRef<str>>(&self, id: T) -> Option<StaticParameter> {
-        // SAFETY: the index from hashmap is never out of bound.
-        unsafe { Some(self.static_parameter_index_unchecked(self.parameter_index(id)?)) }
-    }
-
-    #[inline]
-    pub fn static_parameter_index(&self, index: usize) -> Option<StaticParameter> {
-        if index < self.parameter_count() {
-            // SAFETY: the index has been checked.
-            unsafe { Some(self.static_parameter_index_unchecked(index)) }
-        } else {
-            None
-        }
-    }
-
-    #[inline]
-    pub unsafe fn static_parameter_index_unchecked(&self, index: usize) -> StaticParameter {
-        StaticParameter {
-            index,
-            id: self.parameter_ids().get_unchecked(index).clone(),
-            min_value: *self.parameter_min_values().get_unchecked(index),
-            max_value: *self.parameter_max_values().get_unchecked(index),
-            default_value: *self.parameter_default_values().get_unchecked(index),
-        }
-    }
-
-    #[inline]
-    pub fn static_parameter_vec(&self) -> Vec<StaticParameter> {
-        self.static_parameter_iter().collect()
-    }
-
-    #[inline]
-    pub fn static_parameter_iter(&self) -> StaticParameterIter {
-        StaticParameterIter {
-            model: self,
-            len: self.parameter_count(),
-            index: 0,
-        }
-    }
-
-    #[inline]
-    pub fn part_count(&self) -> usize {
-        self.static_data.part_ids.len()
-    }
-
-    #[inline]
-    pub fn part_ids(&self) -> &[String] {
-        &self.static_data.part_ids
-    }
-
-    #[inline]
-    pub fn part_index<T: AsRef<str>>(&self, id: T) -> Option<usize> {
-        self.static_data.part_ids_map.get(id.as_ref()).copied()
-    }
-
-    #[inline]
-    pub fn part_opacities(&self) -> &[f32] {
-        // SAFETY: it's safe as long as `self` is immutable.
-        unsafe { self.mut_data.part_opacities.as_ref() }
-    }
-
-    #[inline]
-    pub fn part_opacities_mut(&mut self) -> &mut [f32] {
-        // SAFETY: it's safe as long as `self` is mutable.
-        unsafe { self.mut_data.part_opacities.as_mut() }
-    }
-
-    #[inline]
-    pub fn part_opacitie<T: AsRef<str>>(&self, id: T) -> Option<f32> {
-        Some(self.part_opacities()[self.part_index(id)?])
-    }
-
-    #[inline]
-    pub fn set_part_opacities<T: AsRef<[f32]>>(&mut self, values: T) -> Result<()> {
-        let values = values.as_ref();
-        if self.part_count() != values.len() {
-            Err(Error::SliceLengthNotEqual(self.part_count(), values.len()))
-        } else {
-            self.part_opacities_mut().copy_from_slice(values);
-            Ok(())
-        }
-    }
-
-    /// If it fails, it returns `None`, otherwise returns the old value.
-    #[inline]
-    pub fn set_part_opacity<T: AsRef<str>>(&mut self, id: T, value: f32) -> Option<f32> {
-        // SAFETY: the index from hashmap is never out of bound.
-        unsafe { Some(self.set_part_opacity_index_unchecked(self.part_index(id)?, value)) }
-    }
-
-    /// If it fails, it returns `None`, otherwise returns the old value.
-    #[inline]
-    pub fn set_part_opacity_index(&mut self, index: usize, value: f32) -> Option<f32> {
-        if index < self.part_count() {
-            // SAFETY: the index has been checked.
-            Some(unsafe { self.set_part_opacity_index_unchecked(index, value) })
-        } else {
-            None
-        }
-    }
-
-    #[inline]
-    pub unsafe fn set_part_opacity_index_unchecked(&mut self, index: usize, value: f32) -> f32 {
-        std::mem::replace(self.part_opacities_mut().get_unchecked_mut(index), value)
-    }
-
-    #[inline]
-    pub fn part_parent_indices(&self) -> &[PartParent] {
-        &self.static_data.part_parent_indices
-    }
-
-    #[inline]
-    pub fn get_static_part(&self, index: usize) -> Option<StaticPart> {
-        if index < self.part_count() {
-            // SAFETY: the index has been checked.
-            Some(unsafe { self.get_static_part_unchecked(index) })
-        } else {
-            None
-        }
-    }
-
-    #[inline]
-    pub unsafe fn get_static_part_unchecked(&self, index: usize) -> StaticPart {
-        StaticPart {
-            index,
-            id: self.part_ids().get_unchecked(index).clone(),
-            part_parent_index: *self.part_parent_indices().get_unchecked(index),
-        }
-    }
-
-    #[inline]
-    pub fn static_part<T: AsRef<str>>(&self, id: T) -> Option<StaticPart> {
-        // SAFETY: the index from hashmap is never out of bound.
-        self.part_index(id)
-            .map(|i| unsafe { self.get_static_part_unchecked(i) })
-    }
-
-    #[inline]
-    pub fn static_part_index(&self, index: usize) -> StaticPart {
-        assert!(index < self.part_count());
-        // SAFETY: the index has been checked.
-        unsafe { self.get_static_part_unchecked(index) }
-    }
-
-    #[inline]
-    pub fn static_part_vec(&self) -> Vec<StaticPart> {
-        self.static_part_iter().collect()
-    }
-
-    #[inline]
-    pub fn static_part_iter(&self) -> StaticPartIter {
-        StaticPartIter {
-            model: self,
-            len: self.part_count(),
-            index: 0,
-        }
-    }
-
-    #[inline]
-    pub fn drawable_count(&self) -> usize {
-        self.static_data.drawable_ids.len()
-    }
-
-    #[inline]
-    pub fn drawable_ids(&self) -> &[String] {
-        &self.static_data.drawable_ids
-    }
-
-    #[inline]
-    pub fn get_drawable_id_index<T: AsRef<str>>(&self, id: T) -> Option<usize> {
-        self.static_data.drawable_ids_map.get(id.as_ref()).copied()
-    }
-
-    #[inline]
-    pub fn drawable_constant_flags(&self) -> &[ConstantFlags] {
-        &self.static_data.drawable_constant_flags
-    }
-
-    pub fn drawable_dynamic_flags(&self) -> Result<Vec<DynamicFlags>> {
-        get_slice(
-            unsafe { cubism_core_sys::csmGetDrawableDynamicFlags(self.as_model_ptr()) },
-            self.drawable_count(),
-        )
-        .ok_or(Error::GetDataError("drawable dynamic flags"))?
-        .iter()
-        .map(|&f| DynamicFlags::from_bits(f).ok_or(Error::InvalidFlags("dynamic", f)))
-        .collect()
-    }
-
-    #[inline]
-    pub fn drawable_texture_indices(&self) -> &[i32] {
-        &self.static_data.drawable_texture_indices
-    }
-
-    #[inline]
-    pub fn drawable_draw_orders(&self) -> Result<&[i32]> {
-        get_slice(
-            unsafe { cubism_core_sys::csmGetDrawableDrawOrders(self.as_model_ptr()) },
-            self.drawable_count(),
-        )
-        .ok_or(Error::GetDataError("drawable draw orders"))
-    }
-
-    #[inline]
-    pub fn drawable_render_orders(&self) -> Result<&[i32]> {
-        get_slice(
-            unsafe { cubism_core_sys::csmGetDrawableRenderOrders(self.as_model_ptr()) },
-            self.drawable_count(),
-        )
-        .ok_or(Error::GetDataError("drawable render orders"))
-    }
-
-    #[inline]
-    pub fn drawable_opacities(&self) -> Result<&[f32]> {
-        get_slice(
-            unsafe { cubism_core_sys::csmGetDrawableOpacities(self.as_model_ptr()) },
-            self.drawable_count(),
-        )
-        .ok_or(Error::GetDataError("drawable opacities"))
-    }
-
-    #[inline]
-    pub fn drawable_masks(&self) -> &[Vec<i32>] {
-        &self.static_data.drawable_marks
-    }
-
-    pub fn drawable_vertex_positions(&self) -> Result<Vec<Vec<Vector2>>> {
-        self.static_data
-            .drawable_vertex_counts
-            .iter()
-            .zip(
-                get_slice(
-                    unsafe { cubism_core_sys::csmGetDrawableVertexPositions(self.as_model_ptr()) },
-                    self.drawable_count(),
-                )
-                .ok_or(Error::GetDataError("drawable vertex positions"))?,
-            )
-            .map(|(&c, &p)| get_slice(p, c).map(|s| s.iter().map(|&v| Vector2::new(v)).collect()))
-            .collect::<Option<_>>()
-            .ok_or(Error::GetDataError("drawable vertex positions"))
-    }
-
-    #[inline]
-    pub fn drawable_vertex_uvs(&self) -> &[Vec<Vector2>] {
-        &self.static_data.drawable_vertex_uvs
-    }
-
-    #[inline]
-    pub fn drawable_indices(&self) -> &[Vec<u16>] {
-        &self.static_data.drawable_indices
-    }
-
-    #[inline]
-    pub fn get_static_drawable(&self, index: usize) -> Option<StaticDrawable> {
-        if index < self.drawable_count() {
-            // SAFETY: the index has been checked.
-            Some(unsafe { self.get_static_drawable_unchecked(index) })
-        } else {
-            None
-        }
-    }
-
-    #[inline]
-    pub unsafe fn get_static_drawable_unchecked(&self, index: usize) -> StaticDrawable {
-        StaticDrawable {
-            index,
-            id: self.drawable_ids().get_unchecked(index).clone(),
-            constant_flag: *self.drawable_constant_flags().get_unchecked(index),
-            texture_index: *self.drawable_texture_indices().get_unchecked(index),
-            masks: self.drawable_masks().get_unchecked(index).clone(),
-            vertex_uvs: self.drawable_vertex_uvs().get_unchecked(index).clone(),
-            indices: self.drawable_indices().get_unchecked(index).clone(),
-        }
-    }
-
-    #[inline]
-    pub fn static_drawable<T: AsRef<str>>(&self, id: T) -> Option<StaticDrawable> {
-        // SAFETY: the index from hashmap is never out of bound.
-        self.get_drawable_id_index(id)
-            .map(|i| unsafe { self.get_static_drawable_unchecked(i) })
-    }
-
-    #[inline]
-    pub fn static_drawable_index(&self, index: usize) -> StaticDrawable {
-        assert!(index < self.drawable_count());
-        // SAFETY: the index has been checked.
-        unsafe { self.get_static_drawable_unchecked(index) }
-    }
-
-    #[inline]
-    pub fn static_drawable_vec(&self) -> Vec<StaticDrawable> {
-        self.static_drawable_iter().collect()
-    }
-
-    #[inline]
-    pub fn static_drawable_iter(&self) -> StaticDrawableIter {
-        StaticDrawableIter {
-            model: self,
-            len: self.drawable_count(),
-            index: 0,
-        }
-    }
-
-    #[inline]
-    pub fn get_dynamic_drawable(&self, index: usize) -> Result<DynamicDrawable> {
-        if index < self.drawable_count() {
-            // SAFETY: the index has been checked.
-            unsafe { self.get_dynamic_drawable_unchecked(index) }
-        } else {
-            Err(Error::InvalidDataCount("drawable dynamic"))
-        }
-    }
-
-    #[inline]
-    pub unsafe fn get_dynamic_drawable_unchecked(&self, index: usize) -> Result<DynamicDrawable> {
-        Ok(DynamicDrawable {
-            index,
-            id: self.drawable_ids().get_unchecked(index).clone(),
-            dynamic_flag: *self.drawable_dynamic_flags()?.get_unchecked(index),
-            draw_order: *self.drawable_draw_orders()?.get_unchecked(index),
-            render_order: *self.drawable_render_orders()?.get_unchecked(index),
-            opacity: *self.drawable_opacities()?.get_unchecked(index),
-            vertex_positions: self
-                .drawable_vertex_positions()?
-                .get_unchecked(index)
-                .clone(),
-        })
-    }
-
-    #[inline]
-    pub fn dynamic_drawable<T: AsRef<str>>(&self, id: T) -> Result<DynamicDrawable> {
-        // SAFETY: the index from hashmap is never out of bound.
-        self.get_drawable_id_index(id)
-            .ok_or(Error::InvalidDataCount("drawable dynamic"))
-            .and_then(|i| unsafe { self.get_dynamic_drawable_unchecked(i) })
-    }
-
-    #[inline]
-    pub fn dynamic_drawable_index(&self, index: usize) -> Result<DynamicDrawable> {
-        assert!(index < self.drawable_count());
-        // SAFETY: the index has been checked.
-        unsafe { self.get_dynamic_drawable_unchecked(index) }
-    }
-
-    #[inline]
-    pub fn dynamic_drawable_vec(&self) -> Result<Vec<DynamicDrawable>> {
-        self.dynamic_drawable_iter().collect()
-    }
-
-    #[inline]
-    pub fn dynamic_drawable_iter(&self) -> DynamicDrawableIter {
-        DynamicDrawableIter {
-            model: self,
-            len: self.drawable_count(),
-            index: 0,
+    pub fn update(&mut self) {
+        unsafe {
+            cubism_core_sys::csmResetDrawableDynamicFlags(self.as_model_mut_ptr());
+            cubism_core_sys::csmUpdateModel(self.as_model_mut_ptr());
         }
     }
 
@@ -807,364 +425,338 @@ impl Model {
     }
 
     #[inline]
-    pub fn update_model(&mut self) {
+    pub fn parameter_count(&self) -> usize {
+        self.parameters.ids.len()
+    }
+
+    #[inline]
+    pub fn parameter_ids(&self) -> &[&str] {
+        &self.parameters.ids
+    }
+
+    #[inline]
+    pub fn parameter_index<T: AsRef<str>>(&self, id: T) -> Option<usize> {
+        self.parameters.ids_map.get(id.as_ref()).copied()
+    }
+
+    #[inline]
+    pub fn parameter_min_values(&self) -> &[f32] {
+        self.parameters.min_values
+    }
+
+    #[inline]
+    pub fn parameter_max_values(&self) -> &[f32] {
+        self.parameters.max_values
+    }
+
+    #[inline]
+    pub fn parameter_default_values(&self) -> &[f32] {
+        self.parameters.default_values
+    }
+
+    #[inline]
+    pub fn parameter_values(&self) -> &[f32] {
+        self.parameters.values
+    }
+
+    #[inline]
+    pub fn parameter_values_mut(&mut self) -> &mut [f32] {
+        self.parameters.values
+    }
+
+    // panic
+    #[inline]
+    pub fn set_parameter_values<T: AsRef<[f32]>>(&mut self, values: T) {
+        self.parameter_values_mut().copy_from_slice(values.as_ref());
+    }
+
+    // panic
+    #[inline]
+    pub fn set_parameter_value<T: AsRef<str>>(&mut self, id: T, value: f32) -> f32 {
+        // SAFETY: the index from hashmap is never out of bound.
         unsafe {
-            cubism_core_sys::csmResetDrawableDynamicFlags(self.as_model_mut_ptr());
-            cubism_core_sys::csmUpdateModel(self.as_model_mut_ptr());
-        }
-    }
-}
-
-impl Clone for Model {
-    fn clone(&self) -> Self {
-        let moc = self.moc();
-        let mut model =
-            init_model(moc.as_moc_ptr()).expect("failed to init model when cloning `Model`"); // it should not fail.
-        let static_data = self.static_data.clone();
-        let mut_data = unsafe {
-            MutableData::new(
-                model.as_mut_ptr() as _,
-                static_data.parameter_ids.len(),
-                static_data.part_ids.len(),
+            self.set_parameter_value_index_unchecked(
+                self.parameter_index(id.as_ref())
+                    .unwrap_or_else(|| panic!("ID {} is not exist", id.as_ref())),
+                value,
             )
-            .expect("failed to new mutable data when cloning `Model`") // it should not fail.
-        };
-
-        let mut model = Self {
-            model,
-            moc,
-            static_data,
-            mut_data,
-        };
-        model.set_parameter_values(self.parameter_values()).unwrap(); // it should not fail.
-        model.set_part_opacities(self.part_opacities()).unwrap(); // it should not fail.
-
-        model
+        }
     }
-}
 
-impl std::convert::TryFrom<Moc> for Model {
-    type Error = Error;
+    // panic
+    #[inline]
+    pub fn set_parameter_value_index(&mut self, index: usize, value: f32) -> f32 {
+        assert!(index < self.parameter_count());
+        // SAFETY: the index has been checked.
+        unsafe { self.set_parameter_value_index_unchecked(index, value) }
+    }
+
+    // safety
+    #[inline]
+    pub unsafe fn set_parameter_value_index_unchecked(&mut self, index: usize, value: f32) -> f32 {
+        mem::replace(self.parameter_values_mut().get_unchecked_mut(index), value)
+    }
 
     #[inline]
-    fn try_from(moc: Moc) -> Result<Self> {
-        Self::new(moc)
+    pub fn parameter_key_values(&self) -> &[&[f32]] {
+        &self.parameters.key_values
     }
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct StaticParameter {
-    pub index: usize,
-    pub id: String,
-    pub min_value: f32,
-    pub max_value: f32,
-    pub default_value: f32,
-}
-
-#[derive(Clone, Debug)]
-pub struct StaticParameterIter<'a> {
-    model: &'a Model,
-    len: usize,
-    index: usize,
-}
-
-impl<'a> Iterator for StaticParameterIter<'a> {
-    type Item = StaticParameter;
 
     #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.index < self.len {
-            // SAFETY: the index has been checked.
-            let parameter = unsafe { self.model.static_parameter_index_unchecked(self.index) };
-            self.index += 1;
-            Some(parameter)
+    pub fn static_parameters(&self) -> StaticParameters {
+        StaticParameters::new(self)
+    }
+
+    #[inline]
+    pub fn part_count(&self) -> usize {
+        self.parts.ids.len()
+    }
+
+    #[inline]
+    pub fn part_ids(&self) -> &[&str] {
+        &self.parts.ids
+    }
+
+    #[inline]
+    pub fn part_index<T: AsRef<str>>(&self, id: T) -> Option<usize> {
+        self.parts.ids_map.get(id.as_ref()).copied()
+    }
+
+    #[inline]
+    pub fn part_opacities(&self) -> &[f32] {
+        self.parts.opacities
+    }
+
+    #[inline]
+    pub fn part_opacities_mut(&mut self) -> &mut [f32] {
+        self.parts.opacities
+    }
+
+    // panic
+    #[inline]
+    pub fn set_part_opacities<T: AsRef<[f32]>>(&mut self, opacities: T) {
+        self.part_opacities_mut()
+            .copy_from_slice(opacities.as_ref());
+    }
+
+    // panic
+    #[inline]
+    pub fn set_part_opacity<T: AsRef<str>>(&mut self, id: T, opacity: f32) -> f32 {
+        // SAFETY: the index from hashmap is never out of bound.
+        unsafe {
+            self.set_part_opacity_index_unchecked(
+                self.part_index(id.as_ref())
+                    .unwrap_or_else(|| panic!("ID {} is not exist", id.as_ref())),
+                opacity,
+            )
+        }
+    }
+
+    // panic
+    #[inline]
+    pub fn set_part_opacity_index(&mut self, index: usize, opacity: f32) -> f32 {
+        assert!(index < self.part_count());
+        // SAFETY: the index has been checked.
+        unsafe { self.set_part_opacity_index_unchecked(index, opacity) }
+    }
+
+    // safety
+    #[inline]
+    pub unsafe fn set_part_opacity_index_unchecked(&mut self, index: usize, opacity: f32) -> f32 {
+        mem::replace(self.part_opacities_mut().get_unchecked_mut(index), opacity)
+    }
+
+    #[inline]
+    pub fn part_parent(&self) -> &[PartParent] {
+        self.parts.parent_indices
+    }
+
+    #[inline]
+    pub fn static_parts(&self) -> StaticParts {
+        StaticParts::new(self)
+    }
+
+    #[inline]
+    pub fn drawable_count(&self) -> usize {
+        self.drawables.ids.len()
+    }
+
+    #[inline]
+    pub fn drawable_ids(&self) -> &[&str] {
+        &self.drawables.ids
+    }
+
+    #[inline]
+    pub fn drawable_index<T: AsRef<str>>(&self, id: T) -> Option<usize> {
+        self.drawables.ids_map.get(id.as_ref()).copied()
+    }
+
+    #[inline]
+    pub fn drawable_constant_flags(&self) -> &[ConstantFlags] {
+        self.drawables.constant_flags
+    }
+
+    #[inline]
+    pub fn drawable_dynamic_flags(&self) -> Result<&[DynamicFlags]> {
+        if self.drawables.dynamic_flags.iter().all(|f| f.is_valid()) {
+            Ok(self.drawables.dynamic_flags)
         } else {
-            None
+            Err(Error::GetDataError("drawable dynamic flags"))
         }
     }
 
     #[inline]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let remain = self.len - self.index;
-        (remain, Some(remain))
+    pub fn drawable_texture_indices(&self) -> &[u32] {
+        self.drawables.texture_indices
     }
-}
-
-impl<'a> DoubleEndedIterator for StaticParameterIter<'a> {
-    #[inline]
-    fn next_back(&mut self) -> Option<Self::Item> {
-        if self.index < self.len {
-            // SAFETY: it's never out of bound.
-            let parameter = unsafe { self.model.static_parameter_index_unchecked(self.len - 1) };
-            self.len -= 1;
-            Some(parameter)
-        } else {
-            None
-        }
-    }
-}
-
-impl<'a> ExactSizeIterator for StaticParameterIter<'a> {}
-impl<'a> std::iter::FusedIterator for StaticParameterIter<'a> {}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct StaticPart {
-    pub index: usize,
-    pub id: String,
-    pub part_parent_index: PartParent,
-}
-
-#[derive(Clone, Debug)]
-pub struct StaticPartIter<'a> {
-    model: &'a Model,
-    len: usize,
-    index: usize,
-}
-
-impl<'a> Iterator for StaticPartIter<'a> {
-    type Item = StaticPart;
 
     #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.index < self.len {
-            // SAFETY: the index has been checked.
-            let part = unsafe { self.model.get_static_part_unchecked(self.index) };
-            self.index += 1;
-            Some(part)
+    pub fn drawable_draw_orders(&self) -> &[i32] {
+        self.drawables.draw_orders
+    }
+
+    #[inline]
+    pub fn drawable_render_orders(&self) -> &[i32] {
+        self.drawables.render_orders
+    }
+
+    #[inline]
+    pub fn drawable_opacities(&self) -> Result<&[f32]> {
+        if self.drawables.opacities.iter().all(|o| check_opacity(o)) {
+            Ok(self.drawables.opacities)
         } else {
-            None
+            Err(Error::GetDataError("drawable opacities"))
         }
     }
 
     #[inline]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let remain = self.len - self.index;
-        (remain, Some(remain))
-    }
-}
-
-impl<'a> DoubleEndedIterator for StaticPartIter<'a> {
-    #[inline]
-    fn next_back(&mut self) -> Option<Self::Item> {
-        if self.index < self.len {
-            // SAFETY: it's never out of bound.
-            let part = unsafe { self.model.get_static_part_unchecked(self.len - 1) };
-            self.len -= 1;
-            Some(part)
-        } else {
-            None
-        }
-    }
-}
-
-impl<'a> ExactSizeIterator for StaticPartIter<'a> {}
-impl<'a> std::iter::FusedIterator for StaticPartIter<'a> {}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct StaticDrawable {
-    pub index: usize,
-    pub id: String,
-    pub constant_flag: ConstantFlags,
-    pub texture_index: i32,
-    pub masks: Vec<i32>,
-    pub vertex_uvs: Vec<Vector2>,
-    pub indices: Vec<u16>,
-}
-
-#[derive(Clone, Debug)]
-pub struct StaticDrawableIter<'a> {
-    model: &'a Model,
-    len: usize,
-    index: usize,
-}
-
-impl<'a> Iterator for StaticDrawableIter<'a> {
-    type Item = StaticDrawable;
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.index < self.len {
-            // SAFETY: the index has been checked.
-            let drawable_static = unsafe { self.model.get_static_drawable_unchecked(self.index) };
-            self.index += 1;
-            Some(drawable_static)
-        } else {
-            None
-        }
+    pub fn drawable_masks(&self) -> &[&[u32]] {
+        &self.drawables.marks
     }
 
     #[inline]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let remain = self.len - self.index;
-        (remain, Some(remain))
-    }
-}
-
-impl<'a> DoubleEndedIterator for StaticDrawableIter<'a> {
-    #[inline]
-    fn next_back(&mut self) -> Option<Self::Item> {
-        if self.index < self.len {
-            // SAFETY: it's never out of bound.
-            let drawable_static = unsafe { self.model.get_static_drawable_unchecked(self.len - 1) };
-            self.len -= 1;
-            Some(drawable_static)
-        } else {
-            None
-        }
-    }
-}
-
-impl<'a> ExactSizeIterator for StaticDrawableIter<'a> {}
-impl<'a> std::iter::FusedIterator for StaticDrawableIter<'a> {}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct DynamicDrawable {
-    pub index: usize,
-    pub id: String,
-    pub dynamic_flag: DynamicFlags,
-    pub draw_order: i32,
-    pub render_order: i32,
-    pub opacity: f32,
-    pub vertex_positions: Vec<Vector2>,
-}
-
-#[derive(Clone, Debug)]
-pub struct DynamicDrawableIter<'a> {
-    model: &'a Model,
-    len: usize,
-    index: usize,
-}
-
-impl<'a> Iterator for DynamicDrawableIter<'a> {
-    type Item = Result<DynamicDrawable>;
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.index < self.len {
-            // SAFETY: the index has been checked.
-            let drawable_dynamic = unsafe { self.model.get_dynamic_drawable_unchecked(self.index) };
-            self.index += 1;
-            Some(drawable_dynamic)
-        } else {
-            None
-        }
+    pub fn drawable_vertex_positions(&self) -> &[&[Vector2]] {
+        &self.drawables.vertex_positions
     }
 
     #[inline]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let remain = self.len - self.index;
-        (remain, Some(remain))
+    pub fn drawable_vertex_uvs(&self) -> &[&[Vector2]] {
+        &self.drawables.vertex_uvs
     }
-}
 
-impl<'a> DoubleEndedIterator for DynamicDrawableIter<'a> {
     #[inline]
-    fn next_back(&mut self) -> Option<Self::Item> {
-        if self.index < self.len {
-            // SAFETY: it's never out of bound.
-            let drawable_dynamic =
-                unsafe { self.model.get_dynamic_drawable_unchecked(self.len - 1) };
-            self.len -= 1;
-            Some(drawable_dynamic)
-        } else {
-            None
-        }
+    pub fn drawable_indices(&self) -> &[&[u16]] {
+        &self.drawables.indices
+    }
+
+    #[inline]
+    pub fn static_drawables(&self) -> StaticDrawables {
+        StaticDrawables::new(self)
+    }
+
+    #[inline]
+    pub fn dynamic_drawables(&self) -> DynamicDrawables {
+        DynamicDrawables::new(self)
     }
 }
 
-impl<'a> ExactSizeIterator for DynamicDrawableIter<'a> {}
-impl<'a> std::iter::FusedIterator for DynamicDrawableIter<'a> {}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Vector2 {
-    pub x: f32,
-    pub y: f32,
-}
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct Vector2(cubism_core_sys::csmVector2);
 
 impl Vector2 {
     #[inline]
-    pub fn new(vertex: cubism_core_sys::csmVector2) -> Self {
-        Self {
-            x: vertex.X,
-            y: vertex.Y,
-        }
+    pub fn new(x: f32, y: f32) -> Self {
+        Self(cubism_core_sys::csmVector2 { X: x, Y: y })
+    }
+
+    #[inline]
+    pub fn x(&self) -> f32 {
+        self.0.X
+    }
+
+    #[inline]
+    pub fn y(&self) -> f32 {
+        self.0.Y
+    }
+
+    #[inline]
+    pub fn x_y(&self) -> (f32, f32) {
+        (self.0.X, self.0.Y)
+    }
+}
+
+impl Default for Vector2 {
+    #[inline]
+    fn default() -> Self {
+        Self(cubism_core_sys::csmVector2 { X: 0., Y: 0. })
+    }
+}
+
+impl PartialEq for Vector2 {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.0.X == other.0.X && self.0.Y == other.0.Y
     }
 }
 
 impl From<cubism_core_sys::csmVector2> for Vector2 {
     #[inline]
-    fn from(vertex: cubism_core_sys::csmVector2) -> Self {
-        Self::new(vertex)
+    fn from(vector: cubism_core_sys::csmVector2) -> Self {
+        Self(vector)
     }
 }
 
-impl From<[f32; 2]> for Vector2 {
+impl From<Vector2> for cubism_core_sys::csmVector2 {
     #[inline]
-    fn from(vertex: [f32; 2]) -> Self {
-        Self {
-            x: vertex[0],
-            y: vertex[1],
-        }
+    fn from(vector: Vector2) -> Self {
+        vector.0
     }
 }
 
-impl From<Vector2> for [f32; 2] {
-    #[inline]
-    fn from(vertex: Vector2) -> Self {
-        [vertex.x, vertex.y]
-    }
-}
-
-impl From<Vector2> for Vec<f32> {
-    #[inline]
-    fn from(vertex: Vector2) -> Self {
-        vec![vertex.x, vertex.y]
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum PartParent {
-    Root,
-    Parent(usize),
-}
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct PartParent(i32);
 
 impl PartParent {
+    const ROOT: i32 = -1;
+
+    // panic
     #[inline]
-    pub fn new(index: i32) -> Result<Self> {
-        match index {
-            i if i < -1 => Err(Error::GetDataError("part parent")),
-            -1 => Ok(Self::Root),
-            _ => Ok(Self::Parent(index as usize)),
+    pub fn new(parent_index: Option<usize>) -> Self {
+        match parent_index {
+            Some(i) => {
+                assert!(i <= i32::MAX as _);
+                Self(i as _)
+            }
+            None => Self(Self::ROOT),
         }
     }
 
-    /// Returns `true` if the [`PartParent`] is [`Root`](PartParent::Root).
     #[inline]
-    pub fn is_root(self) -> bool {
-        self == Self::Root
-    }
-
-    /// Returns `true` if the [`PartParent`] is [`Parent`](PartParent::Parent).
-    #[inline]
-    pub fn is_parent(self) -> bool {
-        matches!(self, Self::Parent(_))
+    fn is_valid(&self) -> bool {
+        self.0 >= Self::ROOT
     }
 
     #[inline]
-    pub fn parent_index(self) -> Option<usize> {
-        match self {
-            PartParent::Root => None,
-            PartParent::Parent(i) => Some(i),
+    pub fn is_parent(&self) -> bool {
+        self.0 == Self::ROOT
+    }
+
+    #[inline]
+    pub fn parent(&self) -> Option<usize> {
+        if self.0 <= Self::ROOT {
+            None
+        } else {
+            Some(self.0 as _)
         }
     }
 }
 
-impl std::convert::TryFrom<i32> for PartParent {
-    type Error = Error;
-
+impl Default for PartParent {
     #[inline]
-    fn try_from(index: i32) -> Result<Self> {
-        Self::new(index)
+    fn default() -> Self {
+        Self(Self::ROOT)
     }
 }
 
@@ -1188,10 +780,6 @@ mod tests {
         set_logger(DefaultLogger);
         let moc = read_haru_moc()?;
         let _model = Model::new(moc)?;
-        //println!("{:?}", model.parameters());
-        //println!("{:?}", model.parts());
-        //println!("{:?}", model.drawable_statics());
-        //println!("{:?}", model.drawable_dynamics());
 
         Ok(())
     }

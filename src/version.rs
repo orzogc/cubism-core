@@ -66,26 +66,26 @@ impl MocVersion {
 
     /// Returns `true` if the [`MocVersion`] is [`Version30`](MocVersion::Version30).
     #[inline]
-    pub fn is_version30(self) -> bool {
-        self == Self::Version30
+    pub fn is_version30(&self) -> bool {
+        matches!(self, Self::Version30)
     }
 
     /// Returns `true` if the [`MocVersion`] is [`Version33`](MocVersion::Version33).
     #[inline]
-    pub fn is_version33(self) -> bool {
-        self == Self::Version33
+    pub fn is_version33(&self) -> bool {
+        matches!(self, Self::Version33)
     }
 
     /// Returns `true` if the [`MocVersion`] is [`Version40`](MocVersion::Version40).
     #[inline]
     pub fn is_version40(self) -> bool {
-        self == Self::Version40
+        matches!(self, Self::Version40)
     }
 
     /// Returns `true` if the [`MocVersion`] is [`VersionUnknown`](MocVersion::VersionUnknown).
     #[inline]
     pub fn is_version_unknown(self) -> bool {
-        self == Self::VersionUnknown
+        matches!(self, Self::VersionUnknown)
     }
 }
 

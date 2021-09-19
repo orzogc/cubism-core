@@ -1,7 +1,10 @@
 //#![warn(missing_docs)]
 
+pub mod drawable;
 pub mod log;
 pub mod model;
+pub mod parameter;
+pub mod part;
 
 mod error;
 mod flags;
@@ -18,6 +21,91 @@ pub use version::*;
 pub(crate) const ALIGN_OF_MOC: usize = cubism_core_sys::csmAlignofMoc as _;
 /// Necessary alignment for models (in bytes).
 pub(crate) const ALIGN_OF_MODEL: usize = cubism_core_sys::csmAlignofModel as _;
+
+pub trait ModelData {
+    type Data;
+
+    fn count(&self) -> usize;
+
+    fn index<T: AsRef<str>>(&self, id: T) -> Option<usize>;
+
+    // unsafe
+    unsafe fn get_index_unchecked(&self, index: usize) -> Self::Data;
+
+    // panic
+    #[inline]
+    fn get<T: AsRef<str>>(&self, id: T) -> Self::Data {
+        // SAFETY: the index from `index()` is never out of bound.
+        unsafe {
+            self.get_index_unchecked(
+                self.index(id.as_ref())
+                    .unwrap_or_else(|| panic!("ID {} is not exist", id.as_ref())),
+            )
+        }
+    }
+
+    // panic
+    #[inline]
+    fn get_index(&self, index: usize) -> Self::Data {
+        assert!(index < self.count());
+        // SAFETY: the index has been checked.
+        unsafe { self.get_index_unchecked(index) }
+    }
+}
+
+macro_rules! impl_iter {
+    ($iter:ty, $item:ty, $collect:ty) => {
+        impl<'a> std::iter::Iterator for $iter {
+            type Item = $item;
+
+            #[inline]
+            fn next(&mut self) -> Option<Self::Item> {
+                if self.start < self.end {
+                    // SAFETY: the index has been checked.
+                    unsafe {
+                        let data = self.get_index_unchecked(self.start);
+                        self.start += 1;
+                        Some(data)
+                    }
+                } else {
+                    None
+                }
+            }
+
+            #[inline]
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                let remain = self.end - self.start;
+                (remain, Some(remain))
+            }
+        }
+
+        impl<'a> std::iter::DoubleEndedIterator for $iter {
+            #[inline]
+            fn next_back(&mut self) -> Option<Self::Item> {
+                if self.start < self.end {
+                    self.end -= 1;
+                    // SAFETY: it's never out of bound.
+                    unsafe { Some(self.get_index_unchecked(self.end)) }
+                } else {
+                    None
+                }
+            }
+        }
+
+        impl<'a> std::iter::ExactSizeIterator for $iter {}
+        impl<'a> std::iter::FusedIterator for $iter {}
+
+        impl<'a> $iter {
+            /// Gets all [`Self::Item`].
+            #[inline]
+            pub fn all(self) -> $collect {
+                self.collect()
+            }
+        }
+    };
+}
+
+pub(crate) use impl_iter;
 
 #[cfg(test)]
 pub(crate) fn read_haru_moc() -> Result<moc::Moc> {
