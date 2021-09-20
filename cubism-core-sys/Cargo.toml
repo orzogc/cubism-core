@@ -3,6 +3,12 @@ name = "cubism-core-sys"
 version = "0.1.0"
 authors = ["orzogc"]
 edition = "2018"
+description = "Low level bindings to Cubism Core native API"
+readme = "README.md"
+repository = "https://github.com/orzogc/cubism-core"
+license = "MIT OR Apache-2.0"
+keywords = ["live2d", "cubism"]
+categories = ["external-ffi-bindings"]
 build = "build.rs"
 links = "Live2DCubismCore"
 
@@ -12,8 +18,8 @@ bindgen = "0.59.1"
 [features]
 default = ["static"]
 static = []
-dynamic = [] # for force to link cubism core's dynamic lib
-doc = [] # just for docs.rs and rust-analyzer
+dynamic = [] # force to link Cubism Core's dynamic lib
+doc = [] # for docs.rs and rust-analyzer
 
 [package.metadata.docs.rs]
 features = [ "doc" ]

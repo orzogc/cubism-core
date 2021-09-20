@@ -1,3 +1,5 @@
+//! Cubism model.
+
 use crate::{
     drawable::{DynamicDrawables, StaticDrawables},
     parameter::StaticParameters,
@@ -9,9 +11,9 @@ use std::{collections::HashMap, ffi::CStr, mem, slice};
 
 const ISIZE_MAX: usize = isize::MAX as _;
 const I32_MAX: u32 = i32::MAX as _;
-const F32_DIFF: f32 = 0.0001;
-const OPACITY_MIN: f32 = 0.0 - F32_DIFF;
-const OPACITY_MAX: f32 = 1.0 + F32_DIFF;
+const F32_EPSILON: f32 = 0.0001;
+const OPACITY_MIN: f32 = 0.0 - F32_EPSILON;
+const OPACITY_MAX: f32 = 1.0 + F32_EPSILON;
 
 #[inline]
 unsafe fn get_slice<'a, T>(ptr: *const T, len: usize) -> Option<&'a [T]> {
@@ -125,14 +127,14 @@ impl<'a> Parameters<'a> {
         let max_values = get_slice_check(
             cubism_core_sys::csmGetParameterMaximumValues(model),
             count,
-            |(i, v)| *v >= min_values[i] - F32_DIFF,
+            |(i, v)| *v >= min_values[i] - F32_EPSILON,
         )
         .ok_or(Error::GetDataError("parameter max values"))?;
 
         let default_values = get_slice_check(
             cubism_core_sys::csmGetParameterDefaultValues(model),
             count,
-            |(i, v)| (min_values[i] - F32_DIFF..=max_values[i] + F32_DIFF).contains(v),
+            |(i, v)| (min_values[i] - F32_EPSILON..=max_values[i] + F32_EPSILON).contains(v),
         )
         .ok_or(Error::GetDataError("parameter default values"))?;
 
@@ -149,7 +151,7 @@ impl<'a> Parameters<'a> {
             .enumerate()
             .map(|(i, (c, p))| {
                 get_slice_check(*p, convert_i32(*c)?, |(_, v)| {
-                    (min_values[i] - F32_DIFF..=max_values[i] + F32_DIFF).contains(v)
+                    (min_values[i] - F32_EPSILON..=max_values[i] + F32_EPSILON).contains(v)
                 })
             })
             .collect::<Option<Box<_>>>()
@@ -339,6 +341,7 @@ impl<'a> Drawables<'a> {
     }
 }
 
+/// Cubism model.
 #[derive(Debug)]
 pub struct Model<'a> {
     moc: Moc,
@@ -349,6 +352,7 @@ pub struct Model<'a> {
 }
 
 impl<'a> Model<'a> {
+    /// Creates [`Model`].
     pub fn new(moc: Moc) -> Result<Self> {
         unsafe {
             let mut model = init_model(moc.as_moc_ptr())?;
@@ -366,11 +370,17 @@ impl<'a> Model<'a> {
         }
     }
 
+    /// Creates [`Model`] from anthor model.
+    ///
+    /// This function doesn't copy the parameter values and the part opacities.
     #[inline]
     pub fn new_from_model(model: &Self) -> Result<Self> {
         Self::new(model.moc())
     }
 
+    /// Clones from anthor model.
+    ///
+    /// This function copies the parameter values and the part opacities, and then calls [`update`](Self::update).
     #[inline]
     pub fn clone_from_model(model: &Self) -> Result<Self> {
         let mut new_model = Self::new_from_model(model)?;
@@ -381,21 +391,33 @@ impl<'a> Model<'a> {
         Ok(new_model)
     }
 
+    /// Gets the model's [`Moc`]
     #[inline]
     pub fn moc(&self) -> Moc {
         self.moc.clone()
     }
 
+    /// Returns a point which points to [`csmModel`](cubism_core_sys::csmModel).
+    ///
+    /// The caller should make sure the returning pointer won't live longer than [`Model`].
     #[inline]
     pub fn as_model_ptr(&self) -> *const cubism_core_sys::csmModel {
         self.model.as_ptr().cast()
     }
 
+    /// Returns a mutable point which points to [`csmModel`](cubism_core_sys::csmModel).
+    ///
+    /// The caller should make sure the returning pointer won't live longer than [`Model`].
     #[inline]
     pub fn as_model_mut_ptr(&mut self) -> *mut cubism_core_sys::csmModel {
         self.model.as_mut_ptr().cast()
     }
 
+    /// Updates the model.
+    ///
+    /// It should be called after setting the parameter values or the part opacities.
+    ///
+    /// After updating the model, the dynamic drawables may be changed.
     #[inline]
     pub fn update(&mut self) {
         unsafe {
@@ -404,6 +426,7 @@ impl<'a> Model<'a> {
         }
     }
 
+    /// Reads info on the model canvas.
     pub fn read_canvas_info(&self) -> Canvas {
         let mut size_in_pixels = cubism_core_sys::csmVector2 { X: 0., Y: 0. };
         let mut origin_in_pixels = cubism_core_sys::csmVector2 { X: 0., Y: 0. };
@@ -424,66 +447,88 @@ impl<'a> Model<'a> {
         }
     }
 
+    /// Returns the count of parameters.
     #[inline]
     pub fn parameter_count(&self) -> usize {
         self.parameters.ids.len()
     }
 
+    /// Returns all IDs of parameters.
     #[inline]
     pub fn parameter_ids(&self) -> &[&str] {
         &self.parameters.ids
     }
 
+    /// Returns the index of a parameter according to its ID,
+    /// or returns [`None`] if ID doesn't exist.
     #[inline]
     pub fn parameter_index<T: AsRef<str>>(&self, id: T) -> Option<usize> {
         self.parameters.ids_map.get(id.as_ref()).copied()
     }
 
+    /// Returns the minimal values of parameters.
     #[inline]
     pub fn parameter_min_values(&self) -> &[f32] {
         self.parameters.min_values
     }
 
+    /// Returns the maximal values of parameters.
     #[inline]
     pub fn parameter_max_values(&self) -> &[f32] {
         self.parameters.max_values
     }
 
+    /// Returns the default values of parameters.
     #[inline]
     pub fn parameter_default_values(&self) -> &[f32] {
         self.parameters.default_values
     }
 
+    /// Returns the values of parameters.
     #[inline]
     pub fn parameter_values(&self) -> &[f32] {
         self.parameters.values
     }
 
+    /// Returns the mutable values of parameters.
     #[inline]
     pub fn parameter_values_mut(&mut self) -> &mut [f32] {
         self.parameters.values
     }
 
-    // panic
+    /// Set the values of parameters.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the length of values doesn't match the returning count of
+    /// [`parameter_count`](Self::parameter_count).
     #[inline]
     pub fn set_parameter_values<T: AsRef<[f32]>>(&mut self, values: T) {
         self.parameter_values_mut().copy_from_slice(values.as_ref());
     }
 
-    // panic
+    /// Set the value of a parameter according to its ID.
+    ///
+    /// # Panics
+    ///
+    /// Panics if ID doesn't exist.
     #[inline]
     pub fn set_parameter_value<T: AsRef<str>>(&mut self, id: T, value: f32) -> f32 {
         // SAFETY: the index from hashmap is never out of bound.
         unsafe {
             self.set_parameter_value_index_unchecked(
                 self.parameter_index(id.as_ref())
-                    .unwrap_or_else(|| panic!("ID {} is not exist", id.as_ref())),
+                    .unwrap_or_else(|| panic!("ID {} doesn't exist", id.as_ref())),
                 value,
             )
         }
     }
 
-    // panic
+    /// Set the value of a parameter according to its index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the index is out of bound.
     #[inline]
     pub fn set_parameter_value_index(&mut self, index: usize, value: f32) -> f32 {
         assert!(index < self.parameter_count());
@@ -491,68 +536,93 @@ impl<'a> Model<'a> {
         unsafe { self.set_parameter_value_index_unchecked(index, value) }
     }
 
-    // safety
+    /// Set the value of a parameter according to its index.
+    ///
+    /// # Safety
+    ///
+    /// The index shouldn't be out of bound.
     #[inline]
     pub unsafe fn set_parameter_value_index_unchecked(&mut self, index: usize, value: f32) -> f32 {
         mem::replace(self.parameter_values_mut().get_unchecked_mut(index), value)
     }
 
+    /// Returns the key values of parameters.
     #[inline]
     pub fn parameter_key_values(&self) -> &[&[f32]] {
         &self.parameters.key_values
     }
 
+    /// Returns static parameters.
     #[inline]
     pub fn static_parameters(&self) -> StaticParameters {
         StaticParameters::new(self)
     }
 
+    /// Returns the count of parts.
     #[inline]
     pub fn part_count(&self) -> usize {
         self.parts.ids.len()
     }
 
+    /// Returns all IDs of parts.
     #[inline]
     pub fn part_ids(&self) -> &[&str] {
         &self.parts.ids
     }
 
+    /// Returns the index of a part according to its ID,
+    /// or returns [`None`] if ID doesn't exist.
     #[inline]
     pub fn part_index<T: AsRef<str>>(&self, id: T) -> Option<usize> {
         self.parts.ids_map.get(id.as_ref()).copied()
     }
 
+    /// Returns the opacities of parts.
     #[inline]
     pub fn part_opacities(&self) -> &[f32] {
         self.parts.opacities
     }
 
+    /// Returns the mutable opacities of parts.
     #[inline]
     pub fn part_opacities_mut(&mut self) -> &mut [f32] {
         self.parts.opacities
     }
 
-    // panic
+    /// Set the opacities of parts.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the length of opacities doesn't match the returning count of
+    /// [`part_count`](Self::part_count).
     #[inline]
     pub fn set_part_opacities<T: AsRef<[f32]>>(&mut self, opacities: T) {
         self.part_opacities_mut()
             .copy_from_slice(opacities.as_ref());
     }
 
-    // panic
+    /// Set the opacity of a part according to its ID.
+    ///
+    /// # Panics
+    ///
+    /// Panics if ID doesn't exist.
     #[inline]
     pub fn set_part_opacity<T: AsRef<str>>(&mut self, id: T, opacity: f32) -> f32 {
         // SAFETY: the index from hashmap is never out of bound.
         unsafe {
             self.set_part_opacity_index_unchecked(
                 self.part_index(id.as_ref())
-                    .unwrap_or_else(|| panic!("ID {} is not exist", id.as_ref())),
+                    .unwrap_or_else(|| panic!("ID {} doesn't exist", id.as_ref())),
                 opacity,
             )
         }
     }
 
-    // panic
+    /// Set the opacity of a part according to its index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the index is out of bound.
     #[inline]
     pub fn set_part_opacity_index(&mut self, index: usize, opacity: f32) -> f32 {
         assert!(index < self.part_count());
@@ -560,66 +630,90 @@ impl<'a> Model<'a> {
         unsafe { self.set_part_opacity_index_unchecked(index, opacity) }
     }
 
-    // safety
+    /// Set the opacity of a part according to its index.
+    ///
+    /// # Safety
+    ///
+    /// The index shouldn't be out of bound.
     #[inline]
     pub unsafe fn set_part_opacity_index_unchecked(&mut self, index: usize, opacity: f32) -> f32 {
         mem::replace(self.part_opacities_mut().get_unchecked_mut(index), opacity)
     }
 
+    /// Returns the parent index of a part.
     #[inline]
     pub fn part_parent(&self) -> &[PartParent] {
         self.parts.parent_indices
     }
 
+    /// Returns static parts.
     #[inline]
     pub fn static_parts(&self) -> StaticParts {
         StaticParts::new(self)
     }
 
+    /// Returns the count of drawables.
     #[inline]
     pub fn drawable_count(&self) -> usize {
         self.drawables.ids.len()
     }
 
+    /// Returns all IDs of drawables.
     #[inline]
     pub fn drawable_ids(&self) -> &[&str] {
         &self.drawables.ids
     }
 
+    /// Returns the index of a drawable according to its ID,
+    /// or returns [`None`] if ID doesn't exist.
     #[inline]
     pub fn drawable_index<T: AsRef<str>>(&self, id: T) -> Option<usize> {
         self.drawables.ids_map.get(id.as_ref()).copied()
     }
 
+    /// Returns the constant flags of drawables.
     #[inline]
     pub fn drawable_constant_flags(&self) -> &[ConstantFlags] {
         self.drawables.constant_flags
     }
 
+    /// Returns the dynamic flags of drawables.
+    ///
+    /// The dynamic flags may be changed after calling [`update`](Self::update).
     #[inline]
     pub fn drawable_dynamic_flags(&self) -> Result<&[DynamicFlags]> {
         if self.drawables.dynamic_flags.iter().all(|f| f.is_valid()) {
             Ok(self.drawables.dynamic_flags)
         } else {
-            Err(Error::GetDataError("drawable dynamic flags"))
+            Err(Error::InvalidFlags("dynamic"))
         }
     }
 
+    /// Returns the texture indices of drawables.
     #[inline]
     pub fn drawable_texture_indices(&self) -> &[u32] {
         self.drawables.texture_indices
     }
 
+    /// Returns the draw orders of drawables.
+    ///
+    /// The draw orders may be changed after calling [`update`](Self::update).
     #[inline]
     pub fn drawable_draw_orders(&self) -> &[i32] {
         self.drawables.draw_orders
     }
 
+    /// Returns the render orders of drawables.
+    ///
+    /// The render orders may be changed after calling [`update`](Self::update).
     #[inline]
     pub fn drawable_render_orders(&self) -> &[i32] {
         self.drawables.render_orders
     }
 
+    /// Returns the opacities of drawables.
+    ///
+    /// The opacities may be changed after calling [`update`](Self::update).
     #[inline]
     pub fn drawable_opacities(&self) -> Result<&[f32]> {
         if self.drawables.opacities.iter().all(|o| check_opacity(o)) {
@@ -629,57 +723,70 @@ impl<'a> Model<'a> {
         }
     }
 
+    /// Returns the masks of drawables.
     #[inline]
     pub fn drawable_masks(&self) -> &[&[u32]] {
         &self.drawables.marks
     }
 
+    /// Returns the vertex positions of drawables.
+    ///
+    /// The vertex positions may be changed after calling [`update`](Self::update).
     #[inline]
     pub fn drawable_vertex_positions(&self) -> &[&[Vector2]] {
         &self.drawables.vertex_positions
     }
 
+    /// Returns the vertex uvs of drawables.
     #[inline]
     pub fn drawable_vertex_uvs(&self) -> &[&[Vector2]] {
         &self.drawables.vertex_uvs
     }
 
+    /// Returns the indices of drawables.
     #[inline]
     pub fn drawable_indices(&self) -> &[&[u16]] {
         &self.drawables.indices
     }
 
+    /// Returns static drawables.
     #[inline]
     pub fn static_drawables(&self) -> StaticDrawables {
         StaticDrawables::new(self)
     }
 
+    /// Returns dynamic drawables.
     #[inline]
     pub fn dynamic_drawables(&self) -> DynamicDrawables {
         DynamicDrawables::new(self)
     }
 }
 
+/// Two dimension vector.
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug)]
 pub struct Vector2(cubism_core_sys::csmVector2);
 
 impl Vector2 {
+    /// Creates [`Vector2`]
     #[inline]
     pub fn new(x: f32, y: f32) -> Self {
         Self(cubism_core_sys::csmVector2 { X: x, Y: y })
     }
 
+    /// Returns the x value of a vector.
     #[inline]
     pub fn x(&self) -> f32 {
         self.0.X
     }
 
+    /// Returns the y value of a vector.
     #[inline]
     pub fn y(&self) -> f32 {
         self.0.Y
     }
 
+    /// Returns the x value and y value of a vector.
     #[inline]
     pub fn x_y(&self) -> (f32, f32) {
         (self.0.X, self.0.Y)
@@ -714,14 +821,22 @@ impl From<Vector2> for cubism_core_sys::csmVector2 {
     }
 }
 
+/// The parent index of a part.
+///
+/// A part has a parent, or it is a root.
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct PartParent(i32);
 
 impl PartParent {
-    const ROOT: i32 = -1;
+    /// The parent index of a part when the part is a root.
+    pub const ROOT: i32 = -1;
 
-    // panic
+    /// Creates [`PartParent`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if the parent index is less than [`ROOT`](Self::ROOT).
     #[inline]
     pub fn new(parent_index: Option<usize>) -> Self {
         match parent_index {
@@ -738,11 +853,15 @@ impl PartParent {
         self.0 >= Self::ROOT
     }
 
+    /// Checks if the parent index represents a root.
     #[inline]
-    pub fn is_parent(&self) -> bool {
+    pub fn is_root(&self) -> bool {
         self.0 == Self::ROOT
     }
 
+    /// Returns the parent index.
+    ///
+    /// Returns [`None`] if the parent index represents a root.
     #[inline]
     pub fn parent(&self) -> Option<usize> {
         if self.0 <= Self::ROOT {
@@ -760,10 +879,14 @@ impl Default for PartParent {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// The model canvas.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Canvas {
+    /// Canvas dimensions.
     pub size_in_pixels: Vector2,
+    /// Origin of model on canvas.
     pub origin_in_pixels: Vector2,
+    /// Aspect used for scaling pixels to units.
     pub pixels_per_unit: f32,
 }
 

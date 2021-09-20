@@ -1,24 +1,37 @@
-/// Cubism Core version.
+/// The version of the Cubism Core lib.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct CubismVersion {
+    /// The version number of the Cubism Core lib.
     pub version: u32,
-    pub major: u8,
-    pub minor: u8,
-    pub patch: u16,
 }
 
 impl CubismVersion {
-    /// Queries Cubism Core version.
+    /// Returns the version of the Cubism Core lib.
     #[inline]
     pub fn version() -> Self {
-        let version = unsafe { cubism_core_sys::csmGetVersion() };
-
-        Self {
-            version,
-            major: ((version & 0xFF00_0000) >> 24) as _,
-            minor: ((version & 0x00FF_0000) >> 16) as _,
-            patch: (version & 0x0000_FFFF) as _,
+        unsafe {
+            Self {
+                version: cubism_core_sys::csmGetVersion(),
+            }
         }
+    }
+
+    /// Returns the major version number of the Cubism Core lib.
+    #[inline]
+    pub fn major(&self) -> u8 {
+        ((self.version & 0xFF00_0000) >> 24) as _
+    }
+
+    /// Returns the minor version number of the Cubism Core lib.
+    #[inline]
+    pub fn minor(&self) -> u8 {
+        ((self.version & 0x00FF_0000) >> 16) as _
+    }
+
+    /// Returns the patch version number of the Cubism Core lib.
+    #[inline]
+    pub fn patch(&self) -> u16 {
+        (self.version & 0x0000_FFFF) as _
     }
 }
 
@@ -28,7 +41,10 @@ impl std::fmt::Display for CubismVersion {
         write!(
             f,
             "{}.{}.{} ({})",
-            self.major, self.minor, self.patch, self.version
+            self.major(),
+            self.minor(),
+            self.patch(),
+            self.version
         )
     }
 }
@@ -58,7 +74,7 @@ impl MocVersion {
         }
     }
 
-    /// Gets latest version which `moc3` file is supported.
+    /// Returns the latest version which `moc3` file is supported.
     #[inline]
     pub fn latest_version() -> Self {
         unsafe { cubism_core_sys::csmGetLatestMocVersion().into() }
@@ -105,7 +121,9 @@ mod tests {
         let version = CubismVersion::version();
         assert_eq!(
             version.version,
-            ((version.major as u32) << 24) + ((version.minor as u32) << 16) + version.patch as u32
+            ((version.major() as u32) << 24)
+                + ((version.minor() as u32) << 16)
+                + version.patch() as u32
         );
     }
 

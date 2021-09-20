@@ -1,15 +1,17 @@
+//! Logger for the Cubism Core lib.
+
 use std::{borrow::Cow, ffi::CStr, os::raw::c_char};
 
 /// Log function type.
 pub type LogFunction = unsafe extern "C" fn(message: *const c_char);
 
 /// Logger trait.
-/// Implementing this trait for setting the logger in Cubism Core lib.
+/// Implementing this trait for setting the logger in the Cubism Core lib.
 pub trait Logger {
     /// Log the message.
     fn log<'a>(message: impl Into<Cow<'a, str>>);
 
-    /// Log function for Cubism Core lib to callback.
+    /// Log function for the Cubism Core lib to callback.
     /// For most cases, there's no need to implement it.
     ///
     /// # Safety
@@ -32,7 +34,7 @@ impl Logger for DefaultLogger {
     }
 }
 
-/// Sets the logger in Cubism Core lib.
+/// Set the logger in the Cubism Core lib.
 #[inline]
 pub fn set_logger<T: Logger>(_: T) {
     unsafe {
@@ -40,7 +42,7 @@ pub fn set_logger<T: Logger>(_: T) {
     }
 }
 
-/// Gets the logger function in Cubism Core lib.
+/// Gets the logger function in the Cubism Core lib.
 #[inline]
 pub fn get_logger() -> Option<LogFunction> {
     unsafe { cubism_core_sys::csmGetLogFunction() }

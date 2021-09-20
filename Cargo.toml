@@ -3,6 +3,12 @@ name = "cubism-core"
 version = "0.1.0"
 authors = ["orzogc"]
 edition = "2018"
+description = "Rust API for Cubism Core"
+readme = "README.md"
+repository = "https://github.com/orzogc/cubism-core"
+license = "MIT OR Apache-2.0"
+keywords = ["live2d", "cubism"]
+categories = ["api-bindings"]
 
 [workspace]
 members = ["cubism-core-sys"]
@@ -15,8 +21,8 @@ cubism-core-sys = { version = "0.1.0", path = "cubism-core-sys", default-feature
 [features]
 default = ["static"]
 static = ["cubism-core-sys/static"]
-dynamic = ["cubism-core-sys/dynamic"]
-doc = ["cubism-core-sys/doc"] # just for docs.rs and rust-analyzer
+dynamic = ["cubism-core-sys/dynamic"] # force to link Cubism Core's dynamic lib
+doc = ["cubism-core-sys/doc"] # for docs.rs and rust-analyzer
 
 [package.metadata.docs.rs]
 features = [ "doc" ]

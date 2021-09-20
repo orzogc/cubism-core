@@ -17,9 +17,7 @@ pub enum Error {
     /// Failed to get data.
     GetDataError(&'static str),
     /// Invalid flags.
-    InvalidFlags(&'static str, u8),
-    /// Two slices have different lengths.
-    SliceLengthNotEqual(usize, usize),
+    InvalidFlags(&'static str),
     /// Failed to read/write file.
     FileIoError(std::io::Error),
 }
@@ -32,12 +30,9 @@ impl std::fmt::Display for Error {
             Error::MocDataTooLarge => write!(f, "the size of moc3 data is too large"),
             Error::InvalidMocData => write!(f, "invalid moc3 data"),
             Error::InitializeModelError => write!(f, "failed to initialize model"),
-            Error::InvalidCount(s) => write!(f, "invalid count of {}", s),
-            Error::GetDataError(s) => write!(f, "failed to get {}", s),
-            Error::InvalidFlags(s, u) => write!(f, "invalid {} flags: {}", s, u),
-            Error::SliceLengthNotEqual(len1, len2) => {
-                write!(f, "two slices have different lengths: {}, {}", len1, len2)
-            }
+            Error::InvalidCount(s) => write!(f, "invalid count of {}", *s),
+            Error::GetDataError(s) => write!(f, "failed to get {}", *s),
+            Error::InvalidFlags(s) => write!(f, "invalid {} flags", *s),
             Error::FileIoError(e) => write!(f, "{}", *e),
         }
     }
@@ -53,8 +48,7 @@ impl std::error::Error for Error {
             Error::InitializeModelError => None,
             Error::InvalidCount(_) => None,
             Error::GetDataError(_) => None,
-            Error::InvalidFlags(_, _) => None,
-            Error::SliceLengthNotEqual(_, _) => None,
+            Error::InvalidFlags(_) => None,
             Error::FileIoError(e) => Some(e),
         }
     }

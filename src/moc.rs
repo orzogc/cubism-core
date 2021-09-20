@@ -51,20 +51,21 @@ impl Moc {
         Self::new(data)
     }
 
-    /// Gets [`Moc`] format version.
+    /// Returns [`Moc`] format version.
     #[inline]
     pub fn version(&self) -> MocVersion {
         get_moc_version(&self.moc).into()
     }
 
-    /// Gets the size of moc.
+    /// Returns the size of moc.
     #[inline]
     pub fn moc_size(&self) -> usize {
         self.moc.len()
     }
 
-    /// Converts [`Moc`] to a [`cubism_core_sys::csmMoc`] pointer.
-    /// The caller should make sure the pointer won't live longer than [`Moc`].
+    /// Returns a pointer which points to [`csmMoc`](cubism_core_sys::csmMoc).
+    ///
+    /// The caller should make sure the returning pointer won't live longer than [`Moc`].
     #[inline]
     pub fn as_moc_ptr(&self) -> *const cubism_core_sys::csmMoc {
         self.moc.as_ptr().cast()

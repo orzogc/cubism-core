@@ -1,16 +1,23 @@
+//! Parts of the Cubism model.
+
 use crate::{
     impl_iter,
     model::{Model, PartParent},
     ModelData,
 };
 
+/// A static part.
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub struct StaticPart {
+    /// The index of a part.
     pub index: usize,
+    /// The ID of a part.
     pub id: String,
+    /// The parent index of a part.
     pub parent: PartParent,
 }
 
+/// Static Parts.
 #[derive(Debug)]
 pub struct StaticParts<'a> {
     model: &'a Model<'a>,

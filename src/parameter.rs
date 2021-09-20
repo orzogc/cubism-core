@@ -1,15 +1,25 @@
+//! Parameters of the Cubism model.
+
 use crate::{impl_iter, Model, ModelData};
 
+/// A static parameter.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StaticParameter {
+    /// The index of a parameter.
     pub index: usize,
+    /// The ID of a parameter.
     pub id: String,
+    /// The minimal value of a parameter.
     pub min_value: f32,
+    /// The maximal value of a parameter.
     pub max_value: f32,
+    /// The default value of a parameter.
     pub default_value: f32,
+    /// The key values of a parameter.
     pub key_values: Vec<f32>,
 }
 
+/// Static parameters.
 #[derive(Debug)]
 pub struct StaticParameters<'a> {
     model: &'a Model<'a>,

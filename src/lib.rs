@@ -1,4 +1,6 @@
-//#![warn(missing_docs)]
+//! Rust API for [Cubism Core native library](https://www.live2d.com/en/download/cubism-sdk/download-native/).
+
+#![warn(missing_docs)]
 
 pub mod drawable;
 pub mod log;
@@ -22,29 +24,46 @@ pub(crate) const ALIGN_OF_MOC: usize = cubism_core_sys::csmAlignofMoc as _;
 /// Necessary alignment for models (in bytes).
 pub(crate) const ALIGN_OF_MODEL: usize = cubism_core_sys::csmAlignofModel as _;
 
+/// A trait for getting data from [`Model`].
 pub trait ModelData {
+    /// Data type.
     type Data;
 
+    /// The count of [`Data`](Self::Data)
     fn count(&self) -> usize;
 
+    /// Returns the index of [`Data`](Self::Data) according to its ID,
+    /// or returns [`None`] if ID doesn't exist.
     fn index<T: AsRef<str>>(&self, id: T) -> Option<usize>;
 
-    // unsafe
+    /// Returns [`Data`](Self::Data) accouding to its index.
+    ///
+    /// # Safety
+    ///
+    /// The caller should make sure the index isn't out of bound.
     unsafe fn get_index_unchecked(&self, index: usize) -> Self::Data;
 
-    // panic
+    /// Returns [`Data`](Self::Data) accouding to its ID.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the ID doesn't exist.
     #[inline]
     fn get<T: AsRef<str>>(&self, id: T) -> Self::Data {
         // SAFETY: the index from `index()` is never out of bound.
         unsafe {
             self.get_index_unchecked(
                 self.index(id.as_ref())
-                    .unwrap_or_else(|| panic!("ID {} is not exist", id.as_ref())),
+                    .unwrap_or_else(|| panic!("ID {} doesn't exist", id.as_ref())),
             )
         }
     }
 
-    // panic
+    /// Returns [`Data`](Self::Data) accouding to its index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the index is out of bound.
     #[inline]
     fn get_index(&self, index: usize) -> Self::Data {
         assert!(index < self.count());
@@ -96,9 +115,9 @@ macro_rules! impl_iter {
         impl<'a> std::iter::FusedIterator for $iter {}
 
         impl<'a> $iter {
-            /// Gets all [`Self::Item`].
+            /// Gets all [`Item`](Self::Item).
             #[inline]
-            pub fn all(self) -> $collect {
+            pub fn get_all(self) -> $collect {
                 self.collect()
             }
         }

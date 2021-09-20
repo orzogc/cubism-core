@@ -1,20 +1,31 @@
+//! Drawables of the Cubism model.
+
 use crate::{
     impl_iter,
     model::{Model, Vector2},
     ConstantFlags, DynamicFlags, ModelData, Result,
 };
 
+/// A static drawable.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StaticDrawable {
+    /// The index of a drawable.
     pub index: usize,
+    /// The ID of a drawable.
     pub id: String,
+    /// The constant flags of a drawable.
     pub constant_flags: ConstantFlags,
+    /// The texture index of a drawable.
     pub texture_index: usize,
+    /// The masks of a drawable.
     pub masks: Vec<usize>,
+    /// The vertex uvx of a drawable.
     pub vertex_uvs: Vec<Vector2>,
+    /// The indices of a drawable.
     pub indices: Vec<usize>,
 }
 
+/// Static drawables.
 #[derive(Debug)]
 pub struct StaticDrawables<'a> {
     model: &'a Model<'a>,
@@ -80,17 +91,26 @@ impl<'a> ModelData for StaticDrawables<'a> {
 
 impl_iter!(StaticDrawables<'a>, StaticDrawable, Vec<StaticDrawable>);
 
+/// A dynamic drawable.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DynamicDrawable {
+    /// The index of a drawable.
     pub index: usize,
+    /// The ID of a drawable.
     pub id: String,
+    /// The dynamic flags of a drawable.
     pub dynamic_flags: DynamicFlags,
+    /// The draw order of a drawable.
     pub draw_order: i32,
+    /// The render order of a drawable.
     pub render_order: i32,
+    /// The opacity of a drawable.
     pub opacity: f32,
+    /// The vertex positions of a drawable.
     pub vertex_positions: Vec<Vector2>,
 }
 
+/// Dyanmic Drawables.
 #[derive(Debug)]
 pub struct DynamicDrawables<'a> {
     model: &'a Model<'a>,
