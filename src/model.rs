@@ -17,7 +17,10 @@ const OPACITY_MAX: f32 = 1.0 + F32_EPSILON;
 
 #[inline]
 unsafe fn get_slice<'a, T>(ptr: *const T, len: usize) -> Option<&'a [T]> {
-    if ptr.is_null() || len * mem::size_of::<T>() > ISIZE_MAX {
+    if ptr.is_null()
+        || ptr as usize % mem::align_of::<T>() != 0
+        || mem::size_of::<T>().saturating_mul(len) > ISIZE_MAX
+    {
         None
     } else {
         // SAFETY: it's safe here because the memory of a C/C++ array is contiguous.
@@ -40,8 +43,11 @@ where
 }
 
 #[inline]
-unsafe fn get_mut_slice<'a, T>(ptr: *mut T, len: usize) -> Option<&'a mut [T]> {
-    if ptr.is_null() || len * mem::size_of::<T>() > ISIZE_MAX {
+unsafe fn get_slice_mut<'a, T>(ptr: *mut T, len: usize) -> Option<&'a mut [T]> {
+    if ptr.is_null()
+        || ptr as usize % mem::align_of::<T>() != 0
+        || mem::size_of::<T>().saturating_mul(len) > ISIZE_MAX
+    {
         None
     } else {
         // SAFETY: it's safe here because the memory of a C/C++ array is contiguous.
@@ -138,7 +144,7 @@ impl<'a> Parameters<'a> {
         )
         .ok_or(Error::GetDataError("parameter default values"))?;
 
-        let values = get_mut_slice(cubism_core_sys::csmGetParameterValues(model), count)
+        let values = get_slice_mut(cubism_core_sys::csmGetParameterValues(model), count)
             .ok_or(Error::GetDataError("parameter values"))?;
 
         let key_values = get_slice(cubism_core_sys::csmGetParameterKeyCounts(model), count)
@@ -186,7 +192,7 @@ impl<'a> Parts<'a> {
             .ok_or(Error::GetDataError("part ids"))?;
         let ids_map = get_ids_map(&ids);
 
-        let opacities = get_mut_slice(cubism_core_sys::csmGetPartOpacities(model), count)
+        let opacities = get_slice_mut(cubism_core_sys::csmGetPartOpacities(model), count)
             .ok_or(Error::GetDataError("part opacities"))?;
 
         let parent_indices = get_slice_check(

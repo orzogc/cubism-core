@@ -115,7 +115,7 @@ macro_rules! impl_iter {
         impl<'a> std::iter::FusedIterator for $iter {}
 
         impl<'a> $iter {
-            /// Gets all [`Item`](Self::Item).
+            /// Gets all data.
             #[inline]
             pub fn get_all(self) -> $collect {
                 self.collect()
